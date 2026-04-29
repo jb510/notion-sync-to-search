@@ -275,6 +275,20 @@ function updateSkippedEntry(existingEntry, now) {
   };
 }
 
+function pageErrorEntry(candidate, pageId, relativePath, error, now) {
+  return {
+    pageId,
+    title: titleFromPageResult(candidate.page),
+    url: candidate.page.url || '',
+    notionLastEditedTime: candidate.page.last_edited_time || '',
+    relativePath,
+    error: error.message,
+    errorName: error.name || 'Error',
+    failedAt: now,
+    syncStatus: 'error',
+  };
+}
+
 function safePruneFile(outDir, entry) {
   if (!entry?.path) return { deleted: false, path: null };
   const filePath = resolveSafePath(entry.path, { mode: 'write' });
@@ -315,6 +329,11 @@ function summarizeRuns(manifest, days) {
       runStartedAt: run.startedAt,
       runCompletedAt: run.completedAt,
     }))),
+    pageErrors: runs.flatMap(run => (run.pageErrors || []).map(page => ({
+      ...page,
+      runStartedAt: run.startedAt,
+      runCompletedAt: run.completedAt,
+    }))),
     errors: runs.filter(run => run.failed || run.errors).map(run => ({
       startedAt: run.startedAt,
       completedAt: run.completedAt,
@@ -341,6 +360,13 @@ function formatSyncReport(report, manifestPath) {
     lines.push('', 'Errors:');
     for (const error of report.errors) {
       lines.push(`  - ${error.startedAt || error.completedAt || 'unknown time'}: ${error.error || `${error.errors} error(s)`}`);
+    }
+  }
+
+  if (report.pageErrors?.length > 0) {
+    lines.push('', 'Page errors:');
+    for (const page of report.pageErrors) {
+      lines.push(`  - ${page.title || page.pageId}: ${page.error}`);
     }
   }
 
@@ -470,6 +496,7 @@ function combineReports(reports, days) {
   if (reports.length === 1) return reports[0];
   const runs = reports.flatMap(report => report.runs || []);
   const prunedPages = reports.flatMap(report => report.prunedPages || []);
+  const pageErrors = reports.flatMap(report => report.pageErrors || []);
   const errors = reports.flatMap(report => report.errors || []);
   return {
     days,
@@ -484,6 +511,7 @@ function combineReports(reports, days) {
     pruned: runs.reduce((sum, run) => sum + (run.pruned || 0), 0),
     runs,
     prunedPages,
+    pageErrors,
     errors,
     reports,
   };
@@ -575,6 +603,7 @@ async function mirrorConfigAll(config, options = {}) {
       refreshed: results.reduce((sum, result) => sum + (result.run?.refreshed || 0), 0),
       skipped: results.reduce((sum, result) => sum + (result.run?.skipped || 0), 0),
       pruned: results.reduce((sum, result) => sum + (result.run?.pruned || 0), 0),
+      errors: results.reduce((sum, result) => sum + (result.run?.errors || 0), 0),
     },
   };
 }
@@ -768,19 +797,30 @@ async function processCandidate(candidate, context) {
     return;
   }
 
-  const entry = await mirrorPage({
-    pageId,
-    page: candidate.page,
-    outDir: candidate.outDir,
-    relativePath: expectedRelativePath,
-    manifest,
-    previousEntry: existing,
-    lastSeenAt: now,
-    lastCheckedAt: now,
-    limits,
-    saveManifest: false,
-  });
-  results.refreshed.push(entry);
+  try {
+    const entry = await mirrorPage({
+      pageId,
+      page: candidate.page,
+      outDir: candidate.outDir,
+      relativePath: expectedRelativePath,
+      manifest,
+      previousEntry: existing,
+      lastSeenAt: now,
+      lastCheckedAt: now,
+      limits,
+      saveManifest: false,
+    });
+    results.refreshed.push(entry);
+  } catch (error) {
+    const failedEntry = pageErrorEntry(candidate, pageId, expectedRelativePath, error, now);
+    results.errors.push(failedEntry);
+    manifest.pages[pageId] = {
+      ...(existing || {}),
+      ...failedEntry,
+      lastSeenAt: now,
+      lastCheckedAt: now,
+    };
+  }
 }
 
 async function mirrorConfig(config, options = {}) {
@@ -815,6 +855,7 @@ async function mirrorConfig(config, options = {}) {
     refreshed: [],
     skipped: [],
     pruned: [],
+    errors: [],
     manifestPath: path.relative(process.cwd(), path.join(safeOutDir, '.notion-search-mirror.json')),
     outDir: path.relative(process.cwd(), safeOutDir) || '.',
     baseOutDir: output.baseOutDir,
@@ -934,6 +975,8 @@ async function mirrorConfig(config, options = {}) {
   run.refreshed = results.refreshed.length;
   run.skipped = results.skipped.length;
   run.pruned = results.pruned.length;
+  run.errors = results.errors.length;
+  run.pageErrors = results.errors;
   run.prunedPages = results.pruned;
   manifest.lastRun = run;
   manifest.workspace = {
@@ -1007,8 +1050,10 @@ async function main() {
       log(`  Pruned stale: ${results.run.pruned}`);
       if (results.run.pruneSkippedReason) log(`  Prune skipped: ${results.run.pruneSkippedReason}`);
       if (results.run.discoveryComplete === false) log('  Discovery: incomplete');
+      if (results.run.errors > 0) log(`  Errors: ${results.run.errors}`);
       if (results.full) log('  Mode: full reconciliation');
       for (const result of results.refreshed || []) log(`  - refreshed ${result.title}: ${result.path || result.relativePath || ''}`);
+      for (const result of results.errors || []) log(`  - error ${result.title || result.pageId}: ${result.error}`);
       for (const result of results.pruned || []) log(`  - ${result.dryRun ? 'would prune' : 'pruned'} ${result.title || result.pageId}: ${result.path}`);
       log('Mode: read-only cache; edit Notion directly');
     }
@@ -1037,6 +1082,7 @@ if (require.main === module) {
     _internal: {
       defaultPagePath,
       manifestEntryFileExists,
+      pageErrorEntry,
       withWorkspaceToken,
       workspaceConfigs,
     },

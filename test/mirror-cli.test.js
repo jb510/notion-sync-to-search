@@ -152,6 +152,27 @@ test('manifest entry cache hit requires regular file', () => {
   assert.equal(_internal.manifestEntryFileExists(dir, { path: directoryPath }), false);
 });
 
+test('page sync errors are recorded as page-level entries', () => {
+  const page = {
+    id: '3193f788-993c-81f3-a066-ccb43c832b89',
+    url: 'https://example.notion.site/page',
+    last_edited_time: '2026-04-29T00:00:00.000Z',
+    properties: { Name: { type: 'title', title: [{ plain_text: 'Huge Page' }] } },
+  };
+  const entry = _internal.pageErrorEntry(
+    { page },
+    page.id,
+    'Huge Page - 3193f788.md',
+    new Error('Block limit exceeded for 3193f788-993c-81f3-a066-ccb43c832b89; maxBlocksPerPage=1885'),
+    '2026-04-29T15:00:00.000Z',
+  );
+
+  assert.equal(entry.title, 'Huge Page');
+  assert.equal(entry.syncStatus, 'error');
+  assert.equal(entry.relativePath, 'Huge Page - 3193f788.md');
+  assert.match(entry.error, /Block limit exceeded/);
+});
+
 test('openclaw memory helper links agent workspaces to one mirror', () => {
   const dir = tmpdir();
   test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
