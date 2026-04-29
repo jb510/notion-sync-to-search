@@ -295,15 +295,7 @@ Inspect a database schema.
 node scripts/get-database-schema.js <database-id> [--json]
 ```
 
-### `notion-to-md.js`
-
-Lower-level page export. Prefer `mirror-page.js` for search mirrors because it adds source frontmatter and updates the manifest.
-
-```bash
-node scripts/notion-to-md.js <page-id> [output-file] [--json]
-```
-
-The shared exporter walks nested child blocks and converts common searchable block types, including headings, paragraphs, lists, todos, toggles, code, quotes, callouts, child page/database titles, links, external media URLs, media captions, and table rows. It does not mirror Notion-hosted signed file URLs.
+`mirror-page.js` is the only single-page export path. It walks nested child blocks, converts common searchable block types to markdown, adds source frontmatter, and updates the mirror manifest.
 
 ## Path Safety
 

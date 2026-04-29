@@ -314,7 +314,6 @@ Use the correct absolute/workspace-relative path for your OpenClaw install.
 - `scripts/search-notion.js` - live Notion title/object search
 - `scripts/query-database.js` - query a Notion database/data source
 - `scripts/get-database-schema.js` - inspect database schema
-- `scripts/notion-to-md.js` - lower-level page-to-markdown export
 
 The markdown exporter walks nested child blocks and captures common searchable block types including headings, paragraphs, lists, todos, toggles, code, quotes, callouts, child page/database titles, links, external media URLs, media captions, and table rows. It does not mirror Notion-hosted signed file URLs.
 
