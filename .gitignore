@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+.env
+.notion-token
+knowledge/Notion Read-only/
+*.log

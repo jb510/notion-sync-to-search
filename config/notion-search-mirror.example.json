@@ -1,0 +1,17 @@
+{
+  "outDir": "knowledge/Notion Read-only",
+  "pages": [
+    {
+      "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
+      "path": "00 Index/Example Page.md"
+    }
+  ],
+  "databases": [
+    {
+      "databaseId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "pathPrefix": "05 Research Library",
+      "limit": 100
+    }
+  ]
+}
+

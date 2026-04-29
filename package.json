@@ -1,0 +1,18 @@
+{
+  "name": "notion-sync-to-search",
+  "version": "0.1.0",
+  "description": "Mirror selected Notion pages into local read-only markdown for OpenClaw/QMD search.",
+  "license": "MIT-0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jb510/notion-sync-to-search.git"
+  },
+  "bin": {
+    "notion-mirror-page": "scripts/mirror-page.js",
+    "notion-mirror-config": "scripts/mirror-config.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
+
