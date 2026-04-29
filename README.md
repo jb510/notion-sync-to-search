@@ -11,7 +11,7 @@ The local files are cache, not canonical content.
 ## Policy
 
 - Notion is source of truth.
-- Local markdown lives under `knowledge/notion-sync-read-only/`.
+- Local markdown lives under `notion-sync-read-only/`.
 - Local markdown is read-only cache for search.
 - Edits go to Notion directly.
 - Refresh the mirror after edits.
@@ -66,7 +66,7 @@ Add the mirror folder to QMD searchable paths for each install:
     "backend": "qmd",
     "qmd": {
       "includeDefaultMemory": true,
-      "paths": ["knowledge/notion-sync-read-only"]
+      "paths": ["notion-sync-read-only"]
     }
   }
 }

@@ -1,5 +1,5 @@
 {
-  "outDir": "knowledge/notion-sync-read-only",
+  "outDir": "notion-sync-read-only",
   "syncScope": "selected",
   "workspace": {
     "query": "",

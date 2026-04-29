@@ -37,7 +37,7 @@ node scripts/mirror-page.js <page-id> [--out-dir <dir>] [--path <relative-path>]
 Default output directory:
 
 ```text
-knowledge/notion-sync-read-only/
+notion-sync-read-only/
 ```
 
 Output files include frontmatter:
@@ -56,7 +56,7 @@ mirrored_at: "..."
 The script also updates:
 
 ```text
-knowledge/notion-sync-read-only/.notion-search-mirror.json
+notion-sync-read-only/.notion-search-mirror.json
 ```
 
 ### `mirror-config.js`
@@ -71,7 +71,7 @@ Config shape:
 
 ```json
 {
-  "outDir": "knowledge/notion-sync-read-only",
+  "outDir": "notion-sync-read-only",
   "syncScope": "selected",
   "workspace": {
     "query": "",
@@ -105,7 +105,7 @@ To mirror the integration-visible workspace:
 
 ```json
 {
-  "outDir": "knowledge/notion-sync-read-only",
+  "outDir": "notion-sync-read-only",
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",

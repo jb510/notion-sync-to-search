@@ -25,7 +25,7 @@ This skill exists because Notion is good as a canonical workspace, but local Ope
 The standard mirror folder is:
 
 ```text
-knowledge/notion-sync-read-only/
+notion-sync-read-only/
 ```
 
 The folder name is intentional. Humans and agents should treat files inside it as generated cache.
@@ -90,13 +90,13 @@ node {baseDir}/scripts/mirror-page.js <notion-page-id>
 Default output:
 
 ```text
-knowledge/notion-sync-read-only/<page-title>.md
+notion-sync-read-only/<page-title>.md
 ```
 
 Custom output directory:
 
 ```bash
-node {baseDir}/scripts/mirror-page.js <page-id> --out-dir "knowledge/notion-sync-read-only"
+node {baseDir}/scripts/mirror-page.js <page-id> --out-dir "notion-sync-read-only"
 ```
 
 Custom relative path:
@@ -105,7 +105,7 @@ Custom relative path:
 node {baseDir}/scripts/mirror-page.js <page-id> --path "05 Research Library/Topic.md"
 ```
 
-The custom path is still placed under `knowledge/notion-sync-read-only/` unless `--out-dir` is changed.
+The custom path is still placed under `notion-sync-read-only/` unless `--out-dir` is changed.
 
 ## Mirror A Configured Knowledge Base
 
@@ -113,7 +113,7 @@ Create a config file:
 
 ```json
 {
-  "outDir": "knowledge/notion-sync-read-only",
+  "outDir": "notion-sync-read-only",
   "syncScope": "selected",
   "workspace": {
     "query": "",
@@ -163,7 +163,7 @@ This skill can mirror every page returned by Notion search for the configured in
 
 ```json
 {
-  "outDir": "knowledge/notion-sync-read-only",
+  "outDir": "notion-sync-read-only",
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",
@@ -216,7 +216,7 @@ The mirror folder should be included in OpenClaw/QMD searchable paths. Example s
     "qmd": {
       "includeDefaultMemory": true,
       "paths": [
-        "knowledge/notion-sync-read-only"
+        "notion-sync-read-only"
       ]
     }
   }

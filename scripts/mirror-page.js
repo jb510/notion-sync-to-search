@@ -19,7 +19,7 @@ const {
   resolveSafePath,
 } = require('./notion-utils.js');
 
-const DEFAULT_OUT_DIR = 'knowledge/notion-sync-read-only';
+const DEFAULT_OUT_DIR = 'notion-sync-read-only';
 const MANIFEST_FILE = '.notion-search-mirror.json';
 
 function usage(exitCode = 0) {
@@ -27,7 +27,7 @@ function usage(exitCode = 0) {
   console.log('');
   console.log('Examples:');
   console.log('  mirror-page.js 3133f788993c8137b51cdb4f312e9500');
-  console.log('  mirror-page.js <page-id> --out-dir "knowledge/notion-sync-read-only"');
+  console.log('  mirror-page.js <page-id> --out-dir "notion-sync-read-only"');
   console.log('  mirror-page.js <page-id> --path "05 Research Library/Topic.md"');
   process.exit(exitCode);
 }
