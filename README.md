@@ -66,6 +66,12 @@ Manual sync is still useful for immediate refresh or debugging:
 node scripts/mirror-config.js config/notion-search-mirror.json
 ```
 
+Manual full reconciliation refetches every currently visible page, rewrites its markdown, and prunes stale manifest entries:
+
+```bash
+node scripts/mirror-config.js config/notion-search-mirror.json --full
+```
+
 ## Scope Modes
 
 `syncScope` controls the source scope:
@@ -125,15 +131,34 @@ Bulk workspace/database mirrors use filenames like `Topic - short-page-id.md` so
 
 Refresh is scheduled pull by default. Notion does not push full page content into this skill; each refresh asks Notion what the integration can see, then pulls current page content into the local read-only mirror.
 
+Each normal refresh is incremental:
+
+- It discovers the current integration-visible page set through Notion search, configured pages, and configured database queries.
+- It checks each page's Notion `last_edited_time`.
+- If the manifest already has the same `last_edited_time` and the local markdown file exists, it skips fetching page blocks.
+- If the page is new or changed, it fetches current blocks and rewrites only that page's markdown.
+- If a previously mirrored page is no longer visible from the current discovery/config, it removes that page from the manifest and prunes the generated local markdown file.
+- It records `lastSeenAt`, `lastCheckedAt`, `mirroredAt`, and a bounded run history in `notion-sync-read-only/.notion-search-mirror.json`.
+
 The scheduler runs:
 
 ```text
 node scripts/mirror-config.js config/notion-search-mirror.json
 ```
 
-That command refreshes markdown files under `notion-sync-read-only/` and updates `.notion-search-mirror.json`. OpenClaw's memory/search backend then sees changed local markdown according to that backend's normal indexing behavior. Some installs may pick up file changes quickly; others may need the user to restart/reindex/refresh memory search.
+That command updates markdown files under `notion-sync-read-only/` only for new or changed pages and updates `.notion-search-mirror.json`. OpenClaw's memory/search backend then sees changed local markdown according to that backend's normal indexing behavior. Some installs may pick up file changes quickly; others may need the user to restart/reindex/refresh memory search.
 
-Manual refresh exists for debugging and immediate catch-up, not as the expected steady-state workflow.
+Manual refresh exists for debugging and immediate catch-up, not as the expected steady-state workflow. Use `--full` when you want a manual reconciliation that ignores the manifest and refetches all currently visible pages. Use `--no-prune` only for troubleshooting when you need stale local files kept temporarily.
+
+## Notion API Limits
+
+The scripts are deliberately conservative with the Notion API:
+
+- Requests are throttled to roughly Notion's documented average rate limit of 3 requests per second.
+- HTTP 429 responses are retried using Notion's `Retry-After` header.
+- Search, data-source query, and block-children requests use paginated requests with `page_size` no higher than 100.
+- Request bodies are rejected locally if they exceed Notion's 500KB payload limit.
+- Local page content is not sent back to Notion; this skill only reads from Notion and writes local markdown cache.
 
 ## OpenClaw Memory/Search
 

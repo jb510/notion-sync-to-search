@@ -15,10 +15,22 @@ const {
   log,
   resolveSafePath,
 } = require('./notion-utils.js');
-const { mirrorPage, DEFAULT_OUT_DIR } = require('./mirror-page.js');
+const {
+  mirrorPage,
+  DEFAULT_OUT_DIR,
+  getPage,
+  getTitle,
+  isInside,
+  loadManifest,
+  saveManifest,
+} = require('./mirror-page.js');
 
 function usage(exitCode = 0) {
-  console.log('Usage: mirror-config.js <config.json> [--json]');
+  console.log('Usage: mirror-config.js <config.json> [--full] [--no-prune] [--json]');
+  console.log('');
+  console.log('Options:');
+  console.log('  --full      Refetch and rewrite every discovered page, even if last_edited_time is unchanged');
+  console.log('  --no-prune  Keep stale local mirror files that are no longer returned by Notion/config');
   console.log('');
   console.log('Config shape:');
   console.log(JSON.stringify({
@@ -34,7 +46,18 @@ function usage(exitCode = 0) {
 function parseArgs(argv) {
   const args = stripTokenArg(argv);
   if (args.length < 1 || args[0] === '--help' || args[0] === '-h') usage(args[0] ? 0 : 1);
-  return { configPath: args[0] };
+
+  const options = { configPath: args[0], full: false, prune: true };
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--full' || args[i] === '--force') {
+      options.full = true;
+    } else if (args[i] === '--no-prune') {
+      options.prune = false;
+    } else {
+      throw new Error(`Unknown argument: ${args[i]}`);
+    }
+  }
+  return options;
 }
 
 function readConfig(configPath) {
@@ -123,13 +146,7 @@ async function searchWorkspacePages(workspaceConfig) {
 }
 
 function titleFromPageResult(page) {
-  for (const property of Object.values(page.properties || {})) {
-    if (property?.type === 'title') {
-      const title = property.title?.map(part => part.plain_text || '').join('').trim();
-      if (title) return title;
-    }
-  }
-  return 'Untitled';
+  return getTitle(page);
 }
 
 function shouldMirrorWorkspace(config) {
@@ -142,9 +159,116 @@ function shouldMirrorWorkspace(config) {
   return scope === 'integration-visible-workspace';
 }
 
-async function mirrorConfig(config) {
+function manifestEntryFileExists(outDir, entry) {
+  if (!entry?.path) return false;
+  const filePath = resolveSafePath(entry.path, { mode: 'write' });
+  return isInside(outDir, filePath) && fs.existsSync(filePath) && !fs.lstatSync(filePath).isSymbolicLink();
+}
+
+function isUnchanged(existingEntry, page, outDir) {
+  return Boolean(
+    existingEntry
+    && existingEntry.notionLastEditedTime
+    && page.last_edited_time
+    && existingEntry.notionLastEditedTime === page.last_edited_time
+    && manifestEntryFileExists(outDir, existingEntry)
+  );
+}
+
+function updateSkippedEntry(existingEntry, now) {
+  return {
+    ...existingEntry,
+    lastSeenAt: now,
+    lastCheckedAt: now,
+    syncStatus: 'skipped_unchanged',
+  };
+}
+
+function safePruneFile(outDir, entry) {
+  if (!entry?.path) return { deleted: false, path: null };
+  const filePath = resolveSafePath(entry.path, { mode: 'write' });
+  if (!isInside(outDir, filePath)) {
+    throw new Error(`Refusing to prune file outside mirror folder: ${entry.path}`);
+  }
+  if (!fs.existsSync(filePath)) return { deleted: false, path: entry.path };
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Refusing to prune symlinked mirror file: ${entry.path}`);
+  }
+  if (!stat.isFile()) return { deleted: false, path: entry.path };
+  fs.unlinkSync(filePath);
+  return { deleted: true, path: entry.path };
+}
+
+function pushRunHistory(manifest, run) {
+  manifest.runs = Array.isArray(manifest.runs) ? manifest.runs : [];
+  manifest.runs.unshift(run);
+  manifest.runs = manifest.runs.slice(0, 20);
+}
+
+async function processCandidate(candidate, context) {
+  const { outDir, manifest, full, now, results, seenPageIds } = context;
+  const pageId = normalizeId(candidate.page.id || candidate.pageId);
+  seenPageIds.add(pageId);
+
+  const existing = manifest.pages?.[pageId];
+  if (!full && isUnchanged(existing, candidate.page, outDir)) {
+    const skippedEntry = updateSkippedEntry(existing, now);
+    manifest.pages[pageId] = skippedEntry;
+    results.skipped.push(skippedEntry);
+    return;
+  }
+
+  const entry = await mirrorPage({
+    pageId,
+    page: candidate.page,
+    outDir: candidate.outDir,
+    relativePath: candidate.relativePath,
+    manifest,
+    previousEntry: existing,
+    lastSeenAt: now,
+    lastCheckedAt: now,
+    saveManifest: false,
+  });
+  results.refreshed.push(entry);
+}
+
+async function mirrorConfig(config, options = {}) {
   const outDir = config.outDir || DEFAULT_OUT_DIR;
-  const results = [];
+  const safeOutDir = resolveSafePath(outDir, { mode: 'write' });
+  fs.mkdirSync(safeOutDir, { recursive: true });
+
+  const manifest = loadManifest(safeOutDir);
+  const now = new Date().toISOString();
+  const run = {
+    startedAt: now,
+    completedAt: null,
+    full: Boolean(options.full),
+    prune: options.prune !== false,
+    seen: 0,
+    refreshed: 0,
+    skipped: 0,
+    pruned: 0,
+    errors: 0,
+  };
+  const results = {
+    refreshed: [],
+    skipped: [],
+    pruned: [],
+    manifestPath: path.relative(process.cwd(), path.join(safeOutDir, '.notion-search-mirror.json')),
+    outDir: path.relative(process.cwd(), safeOutDir) || '.',
+    full: run.full,
+    prune: run.prune,
+  };
+  const seenPageIds = new Set();
+  const context = {
+    outDir: safeOutDir,
+    manifest,
+    full: run.full,
+    now,
+    results,
+    seenPageIds,
+  };
 
   if (shouldMirrorWorkspace(config)) {
     const workspace = config.workspace || {};
@@ -154,21 +278,22 @@ async function mirrorConfig(config) {
     for (const page of pages) {
       const title = titleFromPageResult(page);
       const relativePath = generatedMirrorPath(prefix, title, page.id);
-      results.push(await mirrorPage({
-        pageId: page.id,
+      await processCandidate({
+        page,
         outDir,
         relativePath,
-      }));
+      }, context);
     }
   }
 
   for (const page of config.pages || []) {
     if (!page.pageId) throw new Error('Each pages[] entry requires pageId');
-    results.push(await mirrorPage({
-      pageId: page.pageId,
+    const pageMetadata = await getPage(page.pageId);
+    await processCandidate({
+      page: pageMetadata,
       outDir,
       relativePath: page.path || null,
-    }));
+    }, context);
   }
 
   for (const database of config.databases || []) {
@@ -179,28 +304,60 @@ async function mirrorConfig(config) {
     for (const page of pages) {
       const title = titleFromPageResult(page);
       const relativePath = generatedMirrorPath(prefix, title, page.id);
-      results.push(await mirrorPage({
-        pageId: page.id,
+      await processCandidate({
+        page,
         outDir,
         relativePath,
-      }));
+      }, context);
     }
   }
+
+  if (run.prune) {
+    for (const [pageId, entry] of Object.entries(manifest.pages || {})) {
+      if (seenPageIds.has(pageId)) continue;
+      const pruned = safePruneFile(safeOutDir, entry);
+      results.pruned.push({
+        pageId,
+        title: entry.title || '',
+        path: pruned.path || entry.path || '',
+        deletedFile: pruned.deleted,
+        prunedAt: now,
+      });
+      delete manifest.pages[pageId];
+    }
+  }
+
+  run.completedAt = new Date().toISOString();
+  run.seen = seenPageIds.size;
+  run.refreshed = results.refreshed.length;
+  run.skipped = results.skipped.length;
+  run.pruned = results.pruned.length;
+  manifest.lastRun = run;
+  pushRunHistory(manifest, run);
+  saveManifest(safeOutDir, manifest);
+  results.run = run;
 
   return results;
 }
 
 async function main() {
   try {
-    const { configPath } = parseArgs(process.argv.slice(2));
+    const options = parseArgs(process.argv.slice(2));
+    const { configPath } = options;
     const config = readConfig(configPath);
-    const results = await mirrorConfig(config);
+    const results = await mirrorConfig(config, options);
 
     if (hasJsonFlag()) {
-      console.log(JSON.stringify({ mirrored: results }, null, 2));
+      console.log(JSON.stringify(results, null, 2));
     } else {
-      log(`Mirrored ${results.length} Notion page(s) into ${config.outDir || DEFAULT_OUT_DIR}`);
-      for (const result of results) log(`  - ${result.title}: ${result.path}`);
+      log(`Notion mirror sync complete into ${results.outDir}`);
+      log(`  Seen: ${results.run.seen}`);
+      log(`  Refreshed: ${results.run.refreshed}`);
+      log(`  Skipped unchanged: ${results.run.skipped}`);
+      log(`  Pruned stale: ${results.run.pruned}`);
+      if (results.full) log('  Mode: full reconciliation');
+      for (const result of results.refreshed) log(`  - refreshed ${result.title}: ${result.path}`);
+      for (const result of results.pruned) log(`  - pruned ${result.title || result.pageId}: ${result.path}`);
       log('Mode: read-only cache; edit Notion directly');
     }
   } catch (error) {

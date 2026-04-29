@@ -117,7 +117,11 @@ function isInside(baseDir, candidatePath) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function updateManifest(outDir, entry) {
+function manifestPath(outDir) {
+  return path.join(outDir, MANIFEST_FILE);
+}
+
+function loadManifest(outDir) {
   const manifestPath = path.join(outDir, MANIFEST_FILE);
   let manifest = { generatedBy: 'notion-sync-to-search', pages: {} };
 
@@ -133,11 +137,22 @@ function updateManifest(outDir, entry) {
   }
 
   manifest.generatedBy = 'notion-sync-to-search';
-  manifest.updatedAt = entry.mirroredAt;
+  manifest.pages = manifest.pages || {};
+  return manifest;
+}
+
+function saveManifest(outDir, manifest) {
+  manifest.generatedBy = 'notion-sync-to-search';
+  manifest.updatedAt = new Date().toISOString();
+  manifest.pages = manifest.pages || {};
+  writeRegularFile(manifestPath(outDir), JSON.stringify(manifest, null, 2) + '\n');
+}
+
+function updateManifest(manifest, entry) {
+  manifest.generatedBy = 'notion-sync-to-search';
   manifest.pages = manifest.pages || {};
   manifest.pages[entry.pageId] = entry;
-
-  writeRegularFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  return manifest;
 }
 
 function writeRegularFile(filePath, body) {
@@ -153,7 +168,7 @@ async function mirrorPage(options) {
 
   fs.mkdirSync(outDir, { recursive: true });
 
-  const page = await getPage(pageId);
+  const page = options.page || await getPage(pageId);
   const title = getTitle(page);
   const relativePath = options.relativePath || `${slugifyTitle(title)}.md`;
   assertRelativePath(relativePath);
@@ -173,14 +188,21 @@ async function mirrorPage(options) {
   writeRegularFile(outputPath, body);
 
   const entry = {
+    ...(options.previousEntry || {}),
     pageId,
     title,
     url: page.url || '',
     notionLastEditedTime: page.last_edited_time || '',
     mirroredAt,
+    lastSeenAt: options.lastSeenAt || mirroredAt,
+    lastCheckedAt: options.lastCheckedAt || mirroredAt,
+    syncStatus: 'refreshed',
     path: path.relative(process.cwd(), outputPath),
   };
-  updateManifest(outDir, entry);
+
+  const manifest = options.manifest || loadManifest(outDir);
+  updateManifest(manifest, entry);
+  if (options.saveManifest !== false) saveManifest(outDir, manifest);
 
   return entry;
 }
@@ -211,5 +233,16 @@ if (require.main === module) {
   checkApiKey();
   main();
 } else {
-  module.exports = { mirrorPage, DEFAULT_OUT_DIR };
+  module.exports = {
+    mirrorPage,
+    DEFAULT_OUT_DIR,
+    MANIFEST_FILE,
+    assertRelativePath,
+    getPage,
+    getTitle,
+    isInside,
+    loadManifest,
+    saveManifest,
+    writeRegularFile,
+  };
 }

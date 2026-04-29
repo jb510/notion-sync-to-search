@@ -37,7 +37,9 @@ The folder name is intentional. Humans and agents should treat files inside it a
 - Pulling individual Notion pages into local markdown for debugging or advanced narrowing.
 - Walking nested page blocks so searchable text inside toggles, lists, callouts, child pages, media captions, and tables is included.
 - Preserving Notion page IDs, URLs, and timestamps in frontmatter.
-- Keeping a local manifest of mirrored pages.
+- Keeping a local manifest of mirrored pages, sync timestamps, and recent run summaries.
+- Skipping block fetches for unchanged pages by comparing Notion `last_edited_time` against the manifest.
+- Pruning generated local markdown when a page is no longer visible to the integration or no longer selected in config.
 - Generating collision-resistant filenames for bulk mirrors by including a short Notion page ID.
 - Letting OpenClaw memory/search index Notion-derived knowledge as normal local markdown.
 - Routing edits back to the live Notion page.
@@ -214,9 +216,36 @@ Manual refresh is for debugging or immediate catch-up:
 node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json
 ```
 
-That command overwrites/updates generated markdown under `notion-sync-read-only/` and updates `.notion-search-mirror.json`. OpenClaw memory/search will see those changes according to the active backend's normal indexing behavior. If search results still look stale, refresh/reindex/restart that memory backend as appropriate for the install.
+That command performs an incremental sync:
+
+1. Discover currently visible pages from workspace search, configured pages, and configured database queries.
+2. Compare each page's Notion `last_edited_time` to `notion-sync-read-only/.notion-search-mirror.json`.
+3. Skip fetching blocks for unchanged pages whose local markdown file still exists.
+4. Fetch blocks and rewrite markdown only for new or changed pages.
+5. Prune generated local markdown for pages that disappeared from the current discovery/config.
+6. Record `lastSeenAt`, `lastCheckedAt`, `mirroredAt`, and recent run summaries in the manifest.
+
+Manual full reconciliation ignores the unchanged-page skip and refetches every currently visible page:
+
+```bash
+node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json --full
+```
+
+Use `--no-prune` only for troubleshooting when stale generated files should be kept temporarily.
+
+OpenClaw memory/search will see mirror changes according to the active backend's normal indexing behavior. If search results still look stale, refresh/reindex/restart that memory backend as appropriate for the install.
 
 For ongoing sync, keep the host scheduler enabled. Choose an interval based on how fresh local search needs to be.
+
+## Notion API Limits
+
+The mirror scripts follow Notion's documented API limits:
+
+- Client-side request pacing is kept near Notion's average limit of 3 requests per second.
+- HTTP 429 responses are retried after the `Retry-After` interval returned by Notion.
+- Search, data-source query, and block-children calls use cursor pagination with `page_size` no higher than 100.
+- Request bodies larger than Notion's 500KB payload limit are rejected before sending.
+- This skill sends only search/query/read requests to Notion. It does not upload local markdown content back to Notion.
 
 ## Search Workflow
 

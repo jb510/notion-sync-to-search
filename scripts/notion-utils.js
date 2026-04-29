@@ -10,9 +10,13 @@ const path = require('path');
 
 const NOTION_VERSION = process.env.NOTION_VERSION || '2026-03-11';
 const REQUEST_TIMEOUT_MS = 30000;
+const REQUEST_MIN_INTERVAL_MS = 350;
+const MAX_REQUEST_BODY_BYTES = 500 * 1024;
+const MAX_RATE_LIMIT_RETRIES = 5;
 
 // Cached token (resolved once per process)
 let _cachedToken = undefined;
+let _lastRequestAt = 0;
 
 /**
  * Resolve the Notion API token from NOTION_API_KEY only.
@@ -154,10 +158,35 @@ function stripTokenArg(args) {
   return result;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForRequestSlot() {
+  const now = Date.now();
+  const waitMs = Math.max(0, _lastRequestAt + REQUEST_MIN_INTERVAL_MS - now);
+  if (waitMs > 0) await sleep(waitMs);
+  _lastRequestAt = Date.now();
+}
+
 /**
- * Make a Notion API request with proper error handling
+ * Make a Notion API request with proper error handling, conservative
+ * client-side throttling, and Retry-After handling for 429 responses.
  */
-function notionRequest(path, method, data = null) {
+async function notionRequest(path, method, data = null, attempt = 0) {
+  await waitForRequestSlot();
+  try {
+    return await notionRequestOnce(path, method, data);
+  } catch (error) {
+    if (error.statusCode === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+      await sleep(error.retryAfterMs || 1000);
+      return notionRequest(path, method, data, attempt + 1);
+    }
+    throw error;
+  }
+}
+
+function notionRequestOnce(path, method, data = null) {
   const apiKey = getApiKey();
   if (!apiKey) {
     return Promise.reject(new Error('No Notion API token found. Set NOTION_API_KEY in the environment.'));
@@ -165,6 +194,10 @@ function notionRequest(path, method, data = null) {
 
   return new Promise((resolve, reject) => {
     const requestData = data ? JSON.stringify(data) : null;
+    if (requestData && Buffer.byteLength(requestData) > MAX_REQUEST_BODY_BYTES) {
+      reject(new Error('Notion API request body exceeds the 500KB payload limit.'));
+      return;
+    }
 
     const options = {
       hostname: 'api.notion.com',
@@ -193,7 +226,7 @@ function notionRequest(path, method, data = null) {
             resolve(body);
           }
         } else {
-          reject(createDetailedError(res.statusCode, body));
+          reject(createDetailedError(res.statusCode, body, res.headers));
         }
       });
     });
@@ -214,43 +247,59 @@ function notionRequest(path, method, data = null) {
 /**
  * Create detailed error message based on status code and response
  */
-function createDetailedError(statusCode, body) {
+function createDetailedError(statusCode, body, headers = {}) {
   let error;
   try {
     error = JSON.parse(body);
   } catch (e) {
-    return new Error(`API error (${statusCode}): ${body}`);
+    const plainError = new Error(`API error (${statusCode}): ${body}`);
+    plainError.statusCode = statusCode;
+    return plainError;
   }
 
   const errorCode = error.code;
   const errorMessage = error.message;
+  let result;
 
   switch (statusCode) {
     case 400:
       if (errorCode === 'validation_error') {
-        return new Error(`Validation error: ${errorMessage}. Check your input data.`);
+        result = new Error(`Validation error: ${errorMessage}. Check your input data.`);
+        break;
       }
-      return new Error(`Bad request: ${errorMessage}`);
+      result = new Error(`Bad request: ${errorMessage}`);
+      break;
 
     case 401:
-      return new Error('Authentication failed. Check that your token is valid and has access to this resource.');
+      result = new Error('Authentication failed. Check that your token is valid and has access to this resource.');
+      break;
 
     case 404:
       if (errorCode === 'object_not_found') {
-        return new Error('Page/database not found. Verify the ID and that your integration has access.');
+        result = new Error('Page/database not found. Verify the ID and that your integration has access.');
+        break;
       }
-      return new Error(`Not found: ${errorMessage}`);
+      result = new Error(`Not found: ${errorMessage}`);
+      break;
 
     case 429:
-      return new Error('Rate limit exceeded. Wait a moment and try again.');
+      result = new Error('Rate limit exceeded. Retried after Notion Retry-After guidance.');
+      result.retryAfterMs = Math.max(1, Number.parseInt(headers['retry-after'] || '1', 10)) * 1000;
+      break;
 
     case 500:
     case 503:
-      return new Error(`Notion server error (${statusCode}). Try again later.`);
+      result = new Error(`Notion server error (${statusCode}). Try again later.`);
+      break;
 
     default:
-      return new Error(`API error (${statusCode}): ${errorMessage || body}`);
+      result = new Error(`API error (${statusCode}): ${errorMessage || body}`);
+      break;
   }
+
+  result.statusCode = statusCode;
+  result.notionCode = errorCode;
+  return result;
 }
 
 // --- ID Utilities ---
@@ -457,7 +506,9 @@ async function getAllBlocks(blockId) {
 
   do {
     const encodedId = encodeURIComponent(normalizedId);
-    const path = `/v1/blocks/${encodedId}/children${cursor ? `?start_cursor=${encodeURIComponent(cursor)}` : ''}`;
+    const params = new URLSearchParams({ page_size: '100' });
+    if (cursor) params.set('start_cursor', cursor);
+    const path = `/v1/blocks/${encodedId}/children?${params.toString()}`;
     const response = await notionRequest(path, 'GET');
 
     for (const block of response.results) {
@@ -511,4 +562,5 @@ module.exports = {
 
   // Testing
   _resetTokenCache: () => { _cachedToken = undefined; },
+  _resetRateLimitState: () => { _lastRequestAt = 0; },
 };
