@@ -59,7 +59,7 @@ Every mirrored file must include frontmatter like this:
 ---
 source: notion
 mirror_mode: read_only
-notion_page_id: "3133f788-993c-8137-b51c-db4f312e9500"
+notion_page_id: "YOUR_NOTION_PAGE_ID"
 notion_url: "https://www.notion.so/..."
 notion_last_edited_time: "2026-04-29T12:00:00.000Z"
 mirrored_at: "2026-04-29T12:05:00.000Z"
@@ -122,13 +122,13 @@ Create a config file:
   },
   "pages": [
     {
-      "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
+      "pageId": "YOUR_NOTION_PAGE_ID",
       "path": "00 Index/OpenClaw Knowledge Base Root.md"
     }
   ],
   "databases": [
     {
-      "databaseId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "databaseId": "YOUR_NOTION_DATABASE_ID",
       "pathPrefix": "05 Research Library",
       "limit": 100
     }
@@ -160,7 +160,7 @@ Use `pages[]` for specific standalone pages:
 
 ```json
 {
-  "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
+  "pageId": "YOUR_NOTION_PAGE_ID",
   "path": "Runbooks/Postgres.md"
 }
 ```
@@ -169,7 +169,7 @@ Use `databases[]` for Notion databases/data sources. The script queries the data
 
 ```json
 {
-  "databaseId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "databaseId": "YOUR_NOTION_DATABASE_ID",
   "pathPrefix": "PRDs",
   "limit": 100
 }
@@ -185,7 +185,7 @@ node {baseDir}/scripts/search-notion.js "prd" --filter database
 Bulk-generated database/workspace file names include a short Notion page ID suffix, for example:
 
 ```text
-Workspace/Project Notes - 3133f788.md
+Workspace/Project Notes - short-page-id.md
 ```
 
 That avoids overwriting unrelated Notion pages with the same title and keeps search hits easy to map back to their source.

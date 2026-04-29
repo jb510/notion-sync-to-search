@@ -8,13 +8,13 @@
   },
   "pages": [
     {
-      "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
+      "pageId": "YOUR_NOTION_PAGE_ID",
       "path": "00 Index/Example Page.md"
     }
   ],
   "databases": [
     {
-      "databaseId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "databaseId": "YOUR_NOTION_DATABASE_ID",
       "pathPrefix": "05 Research Library",
       "limit": 100
     }

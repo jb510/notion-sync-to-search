@@ -80,13 +80,13 @@ Config shape:
   },
   "pages": [
     {
-      "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
+      "pageId": "YOUR_NOTION_PAGE_ID",
       "path": "00 Index/OpenClaw Knowledge Base Root.md"
     }
   ],
   "databases": [
     {
-      "databaseId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "databaseId": "YOUR_NOTION_DATABASE_ID",
       "pathPrefix": "05 Research Library",
       "limit": 100
     }
@@ -121,7 +121,7 @@ In `integration-visible-workspace` mode:
 
 ```json
 {
-  "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
+  "pageId": "YOUR_NOTION_PAGE_ID",
   "path": "Runbooks/Postgres.md"
 }
 ```
@@ -133,7 +133,7 @@ In `integration-visible-workspace` mode:
 
 ```json
 {
-  "databaseId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "databaseId": "YOUR_NOTION_DATABASE_ID",
   "pathPrefix": "PRDs",
   "limit": 100
 }
@@ -170,7 +170,7 @@ To mirror the integration-visible workspace:
 
 This is permission-scoped and bounded by `workspace.limit`.
 
-Generated database/workspace paths include a short page ID suffix, such as `Workspace/Topic - 3133f788.md`, so duplicate titles do not overwrite unrelated pages. Explicit `pages[].path` values are respected exactly.
+Generated database/workspace paths include a short page ID suffix, such as `Workspace/Topic - short-page-id.md`, so duplicate titles do not overwrite unrelated pages. Explicit `pages[].path` values are respected exactly.
 
 ## Live Notion Read Helpers
 

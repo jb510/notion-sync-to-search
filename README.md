@@ -63,7 +63,7 @@ How the config gets populated:
 
 ```json
 {
-  "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
+  "pageId": "YOUR_NOTION_PAGE_ID",
   "path": "Runbooks/Postgres.md"
 }
 ```
@@ -72,7 +72,7 @@ How the config gets populated:
 
 ```json
 {
-  "databaseId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "databaseId": "YOUR_NOTION_DATABASE_ID",
   "pathPrefix": "PRDs",
   "limit": 100
 }
@@ -87,7 +87,7 @@ node scripts/search-notion.js "prd" --filter database
 
 This is bounded and permission-scoped. It mirrors what Notion search returns for the integration, not necessarily every private page in the human user's Notion account.
 
-Bulk workspace/database mirrors use filenames like `Topic - 3133f788.md` so duplicate Notion titles do not overwrite each other.
+Bulk workspace/database mirrors use filenames like `Topic - short-page-id.md` so duplicate Notion titles do not overwrite each other.
 
 ## OpenClaw Memory/Search
 
