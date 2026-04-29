@@ -117,7 +117,7 @@ To mirror the integration-visible workspace:
 }
 ```
 
-This is permission-scoped and bounded by `workspace.limit`. Legacy configs with `workspace.enabled: true` are still accepted when `syncScope` is not present.
+This is permission-scoped and bounded by `workspace.limit`.
 
 Generated database/workspace paths include a short page ID suffix, such as `Workspace/Topic - 3133f788.md`, so duplicate titles do not overwrite unrelated pages. Explicit `pages[].path` values are respected exactly.
 

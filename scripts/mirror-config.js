@@ -133,15 +133,13 @@ function titleFromPageResult(page) {
 }
 
 function shouldMirrorWorkspace(config) {
-  const hasExplicitScope = Object.prototype.hasOwnProperty.call(config, 'syncScope');
   const scope = config.syncScope || 'selected';
   const validScopes = new Set(['selected', 'integration-visible-workspace']);
   if (!validScopes.has(scope)) {
     throw new Error('syncScope must be "selected" or "integration-visible-workspace"');
   }
 
-  return scope === 'integration-visible-workspace' ||
-    (!hasExplicitScope && config.workspace?.enabled === true);
+  return scope === 'integration-visible-workspace';
 }
 
 async function mirrorConfig(config) {
