@@ -114,8 +114,8 @@ Create a config file:
 ```json
 {
   "outDir": "knowledge/notion-sync-read-only",
+  "syncScope": "selected",
   "workspace": {
-    "enabled": false,
     "query": "",
     "pathPrefix": "Workspace",
     "limit": 500
@@ -144,6 +144,11 @@ node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json
 
 Use database/workspace mirroring carefully. It mirrors only pages the integration can see. It does not bypass Notion sharing or permissions.
 
+`syncScope` controls the source scope:
+
+- `selected` mirrors only configured `pages[]` and `databases[]`.
+- `integration-visible-workspace` mirrors every page returned by Notion search for the integration.
+
 Bulk-generated database/workspace file names include a short Notion page ID suffix, for example:
 
 ```text
@@ -159,8 +164,8 @@ This skill can mirror every page returned by Notion search for the configured in
 ```json
 {
   "outDir": "knowledge/notion-sync-read-only",
+  "syncScope": "integration-visible-workspace",
   "workspace": {
-    "enabled": true,
     "query": "",
     "pathPrefix": "Workspace",
     "limit": 500
@@ -168,7 +173,7 @@ This skill can mirror every page returned by Notion search for the configured in
 }
 ```
 
-This is not enabled by default because "whole workspace" means "everything this Notion integration can see and the Notion search API returns," not necessarily every private page in the human user's Notion account. Notion's search endpoint is also not designed as a guaranteed exhaustive export API. It can pull stale, irrelevant, or duplicate pages into local search, and it can miss pages while indexes catch up. Prefer explicit pages/databases for curated knowledge bases; use workspace mirroring when the integration is intentionally scoped to the knowledge base you want indexed.
+The default `syncScope` is `selected`. Whole workspace mirroring is not the default because "whole workspace" means "everything this Notion integration can see and the Notion search API returns," not necessarily every private page in the human user's Notion account. Notion's search endpoint is also not designed as a guaranteed exhaustive export API. It can pull stale, irrelevant, or duplicate pages into local search, and it can miss pages while indexes catch up. Prefer explicit pages/databases for curated knowledge bases; use `integration-visible-workspace` when the integration is intentionally scoped to the knowledge base you want indexed.
 
 ## Search Workflow
 

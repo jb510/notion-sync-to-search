@@ -34,17 +34,23 @@ cp config/notion-search-mirror.example.json config/notion-search-mirror.json
 node scripts/mirror-config.js config/notion-search-mirror.json
 ```
 
-To mirror every page the integration can see, set:
+To mirror every page the integration can see, set `syncScope` to `integration-visible-workspace`:
 
 ```json
 {
+  "syncScope": "integration-visible-workspace",
   "workspace": {
-    "enabled": true,
     "query": "",
+    "pathPrefix": "Workspace",
     "limit": 500
   }
 }
 ```
+
+`syncScope` controls the source scope:
+
+- `selected` mirrors only configured `pages[]` and `databases[]`.
+- `integration-visible-workspace` mirrors every page returned by Notion search for the integration.
 
 This is bounded and permission-scoped. It mirrors what Notion search returns for the integration, not necessarily every private page in the human user's Notion account.
 

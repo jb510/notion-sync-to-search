@@ -72,8 +72,8 @@ Config shape:
 ```json
 {
   "outDir": "knowledge/notion-sync-read-only",
+  "syncScope": "selected",
   "workspace": {
-    "enabled": false,
     "query": "",
     "pathPrefix": "Workspace",
     "limit": 500
@@ -96,7 +96,28 @@ Config shape:
 
 Database entries may include Notion API `filter` and `sorts` payloads.
 
-Set `workspace.enabled` to `true` to mirror pages returned by Notion search for the current integration. This is permission-scoped and bounded by `workspace.limit`.
+`syncScope` controls the source scope:
+
+- `selected` mirrors only configured `pages[]` and `databases[]`.
+- `integration-visible-workspace` mirrors every page returned by Notion search for the integration.
+
+To mirror the integration-visible workspace:
+
+```json
+{
+  "outDir": "knowledge/notion-sync-read-only",
+  "syncScope": "integration-visible-workspace",
+  "workspace": {
+    "query": "",
+    "pathPrefix": "Workspace",
+    "limit": 500
+  },
+  "pages": [],
+  "databases": []
+}
+```
+
+This is permission-scoped and bounded by `workspace.limit`. Legacy configs with `workspace.enabled: true` are still accepted when `syncScope` is not present.
 
 Generated database/workspace paths include a short page ID suffix, such as `Workspace/Topic - 3133f788.md`, so duplicate titles do not overwrite unrelated pages. Explicit `pages[].path` values are respected exactly.
 

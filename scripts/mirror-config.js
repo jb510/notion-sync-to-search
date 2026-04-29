@@ -23,7 +23,8 @@ function usage(exitCode = 0) {
   console.log('Config shape:');
   console.log(JSON.stringify({
     outDir: DEFAULT_OUT_DIR,
-    workspace: { enabled: false, query: '', pathPrefix: 'Workspace', limit: 500 },
+    syncScope: 'selected',
+    workspace: { query: '', pathPrefix: 'Workspace', limit: 500 },
     pages: [{ pageId: '...', path: '00 Index/Page.md' }],
     databases: [{ databaseId: '...', pathPrefix: '05 Research Library', limit: 100 }],
   }, null, 2));
@@ -131,13 +132,26 @@ function titleFromPageResult(page) {
   return 'Untitled';
 }
 
+function shouldMirrorWorkspace(config) {
+  const hasExplicitScope = Object.prototype.hasOwnProperty.call(config, 'syncScope');
+  const scope = config.syncScope || 'selected';
+  const validScopes = new Set(['selected', 'integration-visible-workspace']);
+  if (!validScopes.has(scope)) {
+    throw new Error('syncScope must be "selected" or "integration-visible-workspace"');
+  }
+
+  return scope === 'integration-visible-workspace' ||
+    (!hasExplicitScope && config.workspace?.enabled === true);
+}
+
 async function mirrorConfig(config) {
   const outDir = config.outDir || DEFAULT_OUT_DIR;
   const results = [];
 
-  if (config.workspace?.enabled) {
-    const pages = await searchWorkspacePages(config.workspace);
-    const prefix = config.workspace.pathPrefix ? sanitizeRelativePathPrefix(config.workspace.pathPrefix) : '';
+  if (shouldMirrorWorkspace(config)) {
+    const workspace = config.workspace || {};
+    const pages = await searchWorkspacePages(workspace);
+    const prefix = workspace.pathPrefix ? sanitizeRelativePathPrefix(workspace.pathPrefix) : '';
 
     for (const page of pages) {
       const title = titleFromPageResult(page);
