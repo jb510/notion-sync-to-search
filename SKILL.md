@@ -149,6 +149,39 @@ Use database/workspace mirroring carefully. It mirrors only pages the integratio
 - `selected` mirrors only configured `pages[]` and `databases[]`.
 - `integration-visible-workspace` mirrors every page returned by Notion search for the integration.
 
+How the config is populated:
+
+- In `selected` mode, the operator maintains `pages[]` and/or `databases[]` in `config/notion-search-mirror.json`.
+- In `integration-visible-workspace` mode, the operator normally leaves `pages[]` and `databases[]` empty. The script discovers pages at runtime through Notion search.
+- Runtime discovery does not rewrite the config file. Mirrored outputs and the `.notion-search-mirror.json` manifest show what was actually mirrored.
+- Notion sharing controls the boundary. The script can only see pages/databases shared with the integration.
+
+Use `pages[]` for specific standalone pages:
+
+```json
+{
+  "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
+  "path": "Runbooks/Postgres.md"
+}
+```
+
+Use `databases[]` for Notion databases/data sources. The script queries the database and mirrors each returned page:
+
+```json
+{
+  "databaseId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "pathPrefix": "PRDs",
+  "limit": 100
+}
+```
+
+To discover IDs, copy a Notion URL or use live search helpers:
+
+```bash
+node {baseDir}/scripts/search-notion.js "postgres runbook" --filter page
+node {baseDir}/scripts/search-notion.js "prd" --filter database
+```
+
 Bulk-generated database/workspace file names include a short Notion page ID suffix, for example:
 
 ```text

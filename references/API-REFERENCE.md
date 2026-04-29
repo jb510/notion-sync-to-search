@@ -101,6 +101,57 @@ Database entries may include Notion API `filter` and `sorts` payloads.
 - `selected` mirrors only configured `pages[]` and `databases[]`.
 - `integration-visible-workspace` mirrors every page returned by Notion search for the integration.
 
+### Config Population
+
+The config file is operator-maintained. The skill does not automatically edit `config/notion-search-mirror.json`.
+
+In `selected` mode:
+
+- Add entries to `pages[]` for individual Notion pages.
+- Add entries to `databases[]` for Notion databases/data sources.
+- The script mirrors exactly those configured page entries plus the pages returned by configured database queries.
+
+In `integration-visible-workspace` mode:
+
+- Leave `pages[]` and `databases[]` empty unless you also want explicit extra entries.
+- The script calls Notion search at runtime and mirrors pages visible to the integration.
+- The generated `.notion-search-mirror.json` manifest records what was mirrored during the run.
+
+`pages[]` entry:
+
+```json
+{
+  "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
+  "path": "Runbooks/Postgres.md"
+}
+```
+
+- `pageId`: Notion page ID from the URL or `search-notion.js`.
+- `path`: optional output path under `outDir`. If omitted, the page title is used.
+
+`databases[]` entry:
+
+```json
+{
+  "databaseId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "pathPrefix": "PRDs",
+  "limit": 100
+}
+```
+
+- `databaseId`: Notion database/data source ID from the URL or `search-notion.js`.
+- `pathPrefix`: optional folder under `outDir`.
+- `limit`: maximum database pages to mirror.
+- `filter` and `sorts`: optional Notion API query payloads.
+
+Discovery helpers:
+
+```bash
+node scripts/search-notion.js "postgres runbook" --filter page
+node scripts/search-notion.js "prd" --filter database
+node scripts/get-database-schema.js <database-id>
+```
+
 To mirror the integration-visible workspace:
 
 ```json

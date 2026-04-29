@@ -52,6 +52,39 @@ To mirror every page the integration can see, set `syncScope` to `integration-vi
 - `selected` mirrors only configured `pages[]` and `databases[]`.
 - `integration-visible-workspace` mirrors every page returned by Notion search for the integration.
 
+How the config gets populated:
+
+- In `selected` mode, you populate `pages[]` and/or `databases[]` yourself. Use this when you want a curated Notion knowledge base.
+- In `integration-visible-workspace` mode, you usually leave `pages[]` and `databases[]` empty. The script asks Notion search for pages visible to the integration each time it runs and mirrors those results.
+- The skill does not permanently rewrite `config/notion-search-mirror.json` with discovered pages. Runtime discovery is reflected in the generated markdown files and `.notion-search-mirror.json` manifest.
+- To control what "workspace" means, share or unshare pages/databases with the Notion integration in Notion. The integration's permissions are the real boundary.
+
+`pages[]` is for individual Notion pages:
+
+```json
+{
+  "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
+  "path": "Runbooks/Postgres.md"
+}
+```
+
+`databases[]` is for Notion databases/data sources. The script queries the database and mirrors the pages returned by that query:
+
+```json
+{
+  "databaseId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "pathPrefix": "PRDs",
+  "limit": 100
+}
+```
+
+Find IDs by copying a Notion page/database URL or by running:
+
+```bash
+node scripts/search-notion.js "postgres runbook" --filter page
+node scripts/search-notion.js "prd" --filter database
+```
+
 This is bounded and permission-scoped. It mirrors what Notion search returns for the integration, not necessarily every private page in the human user's Notion account.
 
 Bulk workspace/database mirrors use filenames like `Topic - 3133f788.md` so duplicate Notion titles do not overwrite each other.
