@@ -1,22 +1,11 @@
 {
   "outDir": "notion-sync-read-only",
-  "syncScope": "selected",
+  "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",
-    "pathPrefix": "Workspace",
-    "limit": 500
+    "pathPrefix": "",
+    "limit": 5000
   },
-  "pages": [
-    {
-      "pageId": "YOUR_NOTION_PAGE_ID",
-      "path": "00 Index/Example Page.md"
-    }
-  ],
-  "databases": [
-    {
-      "databaseId": "YOUR_NOTION_DATABASE_ID",
-      "pathPrefix": "05 Research Library",
-      "limit": 100
-    }
-  ]
+  "pages": [],
+  "databases": []
 }

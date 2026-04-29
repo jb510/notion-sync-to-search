@@ -1,7 +1,7 @@
 {
   "name": "notion-sync-to-search",
   "version": "0.1.0",
-  "description": "Mirror Notion into local read-only markdown so OpenClaw memory/search can use Notion as an auxiliary searchable knowledge base.",
+  "description": "Keep a local read-only markdown mirror of an integration-visible Notion workspace for OpenClaw memory/search.",
   "license": "MIT-0",
   "repository": {
     "type": "git",
@@ -9,7 +9,8 @@
   },
   "bin": {
     "notion-mirror-page": "scripts/mirror-page.js",
-    "notion-mirror-config": "scripts/mirror-config.js"
+    "notion-mirror-config": "scripts/mirror-config.js",
+    "notion-install-scheduler": "scripts/install-scheduler.js"
   },
   "engines": {
     "node": ">=18"

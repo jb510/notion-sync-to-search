@@ -61,7 +61,7 @@ notion-sync-read-only/.notion-search-mirror.json
 
 ### `mirror-config.js`
 
-Pull configured pages and database query results.
+Refresh the local Notion knowledge-base mirror.
 
 ```bash
 node scripts/mirror-config.js config/notion-search-mirror.json [--json]
@@ -72,25 +72,14 @@ Config shape:
 ```json
 {
   "outDir": "notion-sync-read-only",
-  "syncScope": "selected",
+  "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",
-    "pathPrefix": "Workspace",
-    "limit": 500
+    "pathPrefix": "",
+    "limit": 5000
   },
-  "pages": [
-    {
-      "pageId": "YOUR_NOTION_PAGE_ID",
-      "path": "00 Index/OpenClaw Knowledge Base Root.md"
-    }
-  ],
-  "databases": [
-    {
-      "databaseId": "YOUR_NOTION_DATABASE_ID",
-      "pathPrefix": "05 Research Library",
-      "limit": 100
-    }
-  ]
+  "pages": [],
+  "databases": []
 }
 ```
 
@@ -98,24 +87,24 @@ Database entries may include Notion API `filter` and `sorts` payloads.
 
 `syncScope` controls the source scope:
 
-- `selected` mirrors only configured `pages[]` and `databases[]`.
-- `integration-visible-workspace` mirrors every page returned by Notion search for the integration.
+- `integration-visible-workspace` is the normal knowledge-base mode. It mirrors every page returned by Notion search for the integration.
+- `selected` is an advanced narrowing mode. It mirrors only configured `pages[]` and `databases[]`.
 
 ### Config Population
 
-The config file is operator-maintained. The skill does not automatically edit `config/notion-search-mirror.json`.
+The config file is operator-maintained. OpenClaw can create or edit it from natural-language instructions, but the mirror script itself does not rewrite `config/notion-search-mirror.json`.
+
+In `integration-visible-workspace` mode:
+
+- Leave `pages[]` and `databases[]` empty unless you intentionally want explicit extra entries.
+- The script calls Notion search at runtime and mirrors pages visible to the integration.
+- The generated `.notion-search-mirror.json` manifest records what was mirrored during the run.
 
 In `selected` mode:
 
 - Add entries to `pages[]` for individual Notion pages.
 - Add entries to `databases[]` for Notion databases/data sources.
 - The script mirrors exactly those configured page entries plus the pages returned by configured database queries.
-
-In `integration-visible-workspace` mode:
-
-- Leave `pages[]` and `databases[]` empty unless you also want explicit extra entries.
-- The script calls Notion search at runtime and mirrors pages visible to the integration.
-- The generated `.notion-search-mirror.json` manifest records what was mirrored during the run.
 
 `pages[]` entry:
 
@@ -152,7 +141,7 @@ node scripts/search-notion.js "prd" --filter database
 node scripts/get-database-schema.js <database-id>
 ```
 
-To mirror the integration-visible workspace:
+Default integration-visible workspace config:
 
 ```json
 {
@@ -160,8 +149,8 @@ To mirror the integration-visible workspace:
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",
-    "pathPrefix": "Workspace",
-    "limit": 500
+    "pathPrefix": "",
+    "limit": 5000
   },
   "pages": [],
   "databases": []
@@ -170,13 +159,26 @@ To mirror the integration-visible workspace:
 
 This is permission-scoped and bounded by `workspace.limit`.
 
-Generated database/workspace paths include a short page ID suffix, such as `Workspace/Topic - short-page-id.md`, so duplicate titles do not overwrite unrelated pages. Explicit `pages[].path` values are respected exactly.
+Generated database/workspace paths include a short page ID suffix, such as `Topic - short-page-id.md`, so duplicate titles do not overwrite unrelated pages. Explicit `pages[].path` values are respected exactly.
 
-### Resync
+### `install-scheduler.js`
 
-Resync is explicit and pull-based. The scripts do not watch Notion or run a background daemon.
+Print or install launchd/systemd/cron scheduler entries for recurring mirror refresh.
 
-Run this whenever the local mirror should catch up with Notion:
+```bash
+node scripts/install-scheduler.js [--config config/notion-search-mirror.json] [--every 60] [--mode print|install] [--json]
+```
+
+- `--mode print` is the default. It prints scheduler files and activation commands.
+- `--mode install` writes scheduler files for launchd on macOS or systemd user timers on Linux.
+- The scheduler helper does not store `NOTION_API_KEY`; configure that secret in the scheduler runtime environment.
+- The scheduled task runs `mirror-config.js`.
+
+### Refresh
+
+Refresh is scheduled pull by default. Notion does not push full page content into this skill; each refresh asks Notion what the integration can see, then pulls current page content into the local read-only mirror.
+
+Manual refresh is available for debugging and immediate catch-up:
 
 ```bash
 node scripts/mirror-config.js config/notion-search-mirror.json
@@ -191,7 +193,7 @@ Effects:
 
 The OpenClaw memory/search backend is responsible for indexing the changed local markdown. If search looks stale after resync, refresh/reindex/restart the active memory/search backend for that install.
 
-For automatic upkeep, schedule the same command with cron, systemd timer, launchd, or another host scheduler.
+For normal operation, keep the generated host scheduler enabled.
 
 ## Live Notion Read Helpers
 
@@ -245,7 +247,7 @@ The shared exporter walks nested child blocks and converts common searchable blo
 
 ## Path Safety
 
-Scripts that write files refuse to write outside the current working directory and refuse to write through symlinks.
+Mirror scripts that write files refuse to write outside the current working directory and refuse to write through symlinks. `install-scheduler.js --mode install` explicitly writes host scheduler files.
 
 ## Non-goals
 
@@ -256,4 +258,4 @@ This skill intentionally does not include:
 - local markdown to Notion push
 - automatic Notion writes from mirror files
 
-Use the bundled `notion` skill or direct Notion API tools for Notion edits, then refresh this search mirror.
+Use the bundled `notion` skill or direct Notion API tools for Notion edits. Scheduled refresh will pull Notion changes into the search mirror.

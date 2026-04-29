@@ -23,10 +23,10 @@ function usage(exitCode = 0) {
   console.log('Config shape:');
   console.log(JSON.stringify({
     outDir: DEFAULT_OUT_DIR,
-    syncScope: 'selected',
-    workspace: { query: '', pathPrefix: 'Workspace', limit: 500 },
-    pages: [{ pageId: '...', path: '00 Index/Page.md' }],
-    databases: [{ databaseId: '...', pathPrefix: '05 Research Library', limit: 100 }],
+    syncScope: 'integration-visible-workspace',
+    workspace: { query: '', pathPrefix: '', limit: 5000 },
+    pages: [],
+    databases: [],
   }, null, 2));
   process.exit(exitCode);
 }
@@ -101,7 +101,7 @@ async function queryDatabasePages(databaseConfig) {
 }
 
 async function searchWorkspacePages(workspaceConfig) {
-  const limit = parseLimit(workspaceConfig.limit, 500, 5000);
+  const limit = parseLimit(workspaceConfig.limit, 5000, 5000);
   const pages = [];
   let cursor = null;
 
@@ -133,7 +133,7 @@ function titleFromPageResult(page) {
 }
 
 function shouldMirrorWorkspace(config) {
-  const scope = config.syncScope || 'selected';
+  const scope = config.syncScope || 'integration-visible-workspace';
   const validScopes = new Set(['selected', 'integration-visible-workspace']);
   if (!validScopes.has(scope)) {
     throw new Error('syncScope must be "selected" or "integration-visible-workspace"');
