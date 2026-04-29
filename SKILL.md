@@ -1,6 +1,6 @@
 ---
 name: notion-sync-to-search
-description: Mirror selected Notion pages into a local read-only markdown knowledge base for OpenClaw/QMD search while keeping Notion as the source of truth. Use when you need Notion content to be searchable locally, need to refresh the Notion search mirror, or need to trace a local search hit back to the live Notion page before editing.
+description: Use Notion as an auxiliary OpenClaw knowledge base by mirroring integration-visible Notion pages into local read-only markdown for QMD/Lossless search while keeping Notion as the source of truth. Use when Notion content should be searchable locally, when refreshing the read-only Notion search mirror, or when tracing a local search hit back to the live Notion page before editing.
 homepage: https://github.com/jb510/notion-sync-to-search
 repository: https://github.com/jb510/notion-sync-to-search
 license: MIT-0
@@ -14,7 +14,9 @@ metadata:
 
 # Notion Sync To Search
 
-Mirror selected Notion pages into local markdown so OpenClaw/QMD can search a Notion knowledge base without treating local files as the source of truth.
+Mirror Notion content into local markdown so OpenClaw/QMD can use Notion as an auxiliary searchable knowledge base without treating local files as the source of truth.
+
+This skill exists because Notion is good as a canonical workspace, but local OpenClaw search works best over local text. The mirror gives agents fast semantic/local search over Notion-derived knowledge while preserving a hard boundary: all edits go back to Notion.
 
 ## Core Policy
 
@@ -28,7 +30,7 @@ Mirror selected Notion pages into local markdown so OpenClaw/QMD can search a No
 The standard mirror folder is:
 
 ```text
-knowledge/Notion Read-only/
+knowledge/notion-sync-read-only/
 ```
 
 The folder name is intentional. Humans and agents should treat files inside it as generated cache.
@@ -36,8 +38,11 @@ The folder name is intentional. Humans and agents should treat files inside it a
 ## What This Skill Is For
 
 - Pulling Notion pages into local markdown for search.
+- Optionally mirroring every page the Notion integration can see, with explicit limits.
+- Walking nested page blocks so searchable text inside toggles, lists, callouts, child pages, media captions, and tables is included.
 - Preserving Notion page IDs, URLs, and timestamps in frontmatter.
 - Keeping a local manifest of mirrored pages.
+- Generating collision-resistant filenames for bulk mirrors by including a short Notion page ID.
 - Letting QMD/Lossless search Notion-derived knowledge as normal local markdown.
 - Routing edits back to the live Notion page.
 
@@ -47,6 +52,7 @@ The folder name is intentional. Humans and agents should treat files inside it a
 - Two-way sync.
 - Editing local markdown and pushing it back to Notion automatically.
 - Creating a second source of truth.
+- Secretly crawling Notion pages that are not shared with the integration.
 
 If you need to create or edit Notion content, use the bundled `notion` skill or direct Notion API tools. After editing Notion, refresh this mirror.
 
@@ -89,13 +95,13 @@ node {baseDir}/scripts/mirror-page.js <notion-page-id>
 Default output:
 
 ```text
-knowledge/Notion Read-only/<page-title>.md
+knowledge/notion-sync-read-only/<page-title>.md
 ```
 
 Custom output directory:
 
 ```bash
-node {baseDir}/scripts/mirror-page.js <page-id> --out-dir "knowledge/Notion Read-only"
+node {baseDir}/scripts/mirror-page.js <page-id> --out-dir "knowledge/notion-sync-read-only"
 ```
 
 Custom relative path:
@@ -104,7 +110,7 @@ Custom relative path:
 node {baseDir}/scripts/mirror-page.js <page-id> --path "05 Research Library/Topic.md"
 ```
 
-The custom path is still placed under `knowledge/Notion Read-only/` unless `--out-dir` is changed.
+The custom path is still placed under `knowledge/notion-sync-read-only/` unless `--out-dir` is changed.
 
 ## Mirror A Configured Knowledge Base
 
@@ -112,7 +118,13 @@ Create a config file:
 
 ```json
 {
-  "outDir": "knowledge/Notion Read-only",
+  "outDir": "knowledge/notion-sync-read-only",
+  "workspace": {
+    "enabled": false,
+    "query": "",
+    "pathPrefix": "Workspace",
+    "limit": 500
+  },
   "pages": [
     {
       "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
@@ -135,12 +147,38 @@ Then run:
 node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json
 ```
 
-Use database mirroring carefully. It mirrors pages the integration can see from the database query; it does not infer your whole Notion workspace.
+Use database/workspace mirroring carefully. It mirrors only pages the integration can see. It does not bypass Notion sharing or permissions.
+
+Bulk-generated database/workspace file names include a short Notion page ID suffix, for example:
+
+```text
+Workspace/Project Notes - 3133f788.md
+```
+
+That avoids overwriting unrelated Notion pages with the same title and keeps search hits easy to map back to their source.
+
+## Whole Workspace Mirroring
+
+This skill can mirror every page returned by Notion search for the configured integration:
+
+```json
+{
+  "outDir": "knowledge/notion-sync-read-only",
+  "workspace": {
+    "enabled": true,
+    "query": "",
+    "pathPrefix": "Workspace",
+    "limit": 500
+  }
+}
+```
+
+This is not enabled by default because "whole workspace" means "everything this Notion integration can see and the Notion search API returns," not necessarily every private page in the human user's Notion account. Notion's search endpoint is also not designed as a guaranteed exhaustive export API. It can pull stale, irrelevant, or duplicate pages into local search, and it can miss pages while indexes catch up. Prefer explicit pages/databases for curated knowledge bases; use workspace mirroring when the integration is intentionally scoped to the knowledge base you want indexed.
 
 ## Search Workflow
 
 1. Search QMD/Lossless as usual.
-2. If a result is under `Notion Read-only/`, read its frontmatter.
+2. If a result is under `notion-sync-read-only/`, read its frontmatter.
 3. Use `notion_page_id` to fetch the current Notion page.
 4. Edit Notion directly.
 5. Refresh the mirror.
@@ -177,7 +215,7 @@ The mirror folder should be included in OpenClaw/QMD searchable paths. Example s
     "qmd": {
       "includeDefaultMemory": true,
       "paths": [
-        "knowledge/Notion Read-only"
+        "knowledge/notion-sync-read-only"
       ]
     }
   }
@@ -190,7 +228,6 @@ Use the correct absolute or workspace-relative path for each install.
 
 - Do not run local-to-Notion sync from this skill.
 - Do not run a realtime sync daemon from this skill.
-- Do not edit files under `Notion Read-only/` except by rerunning mirror scripts.
+- Do not edit files under `notion-sync-read-only/` except by rerunning mirror scripts.
 - If a mirrored file and Notion disagree, trust Notion.
 - If frontmatter does not identify a Notion page, treat the local file as untrusted cache.
-

@@ -8,7 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const NOTION_VERSION = '2025-09-03';
+const NOTION_VERSION = process.env.NOTION_VERSION || '2026-03-11';
 
 // Cached token (resolved once per process)
 let _cachedToken = undefined;
@@ -680,6 +680,14 @@ function blocksToMarkdown(blocks) {
       case 'numbered_list_item':
         lines.push(`1. ${richTextToMarkdown(content.rich_text)}`);
         break;
+      case 'to_do': {
+        const checked = content.checked ? 'x' : ' ';
+        lines.push(`- [${checked}] ${richTextToMarkdown(content.rich_text)}`);
+        break;
+      }
+      case 'toggle':
+        lines.push(`- ${richTextToMarkdown(content.rich_text)}`, '');
+        break;
       case 'code': {
         const code = richTextToPlain(content.rich_text);
         const lang = content.language || 'plain text';
@@ -695,6 +703,31 @@ function blocksToMarkdown(blocks) {
       case 'callout': {
         const emoji = content.icon?.emoji || '📌';
         lines.push(`${emoji} ${richTextToMarkdown(content.rich_text)}`, '');
+        break;
+      }
+      case 'child_page':
+        lines.push(`## ${content.title || 'Untitled child page'}`, '');
+        break;
+      case 'child_database':
+        lines.push(`## ${content.title || 'Untitled child database'}`, '');
+        break;
+      case 'bookmark':
+      case 'embed':
+      case 'link_preview':
+        if (content.url) lines.push(content.url, '');
+        break;
+      case 'image':
+      case 'file':
+      case 'pdf':
+      case 'video': {
+        const caption = richTextToMarkdown(content.caption || []);
+        const url = content.external?.url || content.file?.url || '';
+        if (caption || url) lines.push([caption, url].filter(Boolean).join(' '), '');
+        break;
+      }
+      case 'table_row': {
+        const cells = content.cells || [];
+        lines.push(`| ${cells.map(cell => richTextToMarkdown(cell)).join(' | ')} |`);
         break;
       }
       default:
@@ -719,7 +752,15 @@ async function getAllBlocks(blockId) {
     const encodedId = encodeURIComponent(normalizedId);
     const path = `/v1/blocks/${encodedId}/children${cursor ? `?start_cursor=${encodeURIComponent(cursor)}` : ''}`;
     const response = await notionRequest(path, 'GET');
-    allBlocks = allBlocks.concat(response.results);
+
+    for (const block of response.results) {
+      allBlocks.push(block);
+      if (block.has_children) {
+        const childBlocks = await getAllBlocks(block.id);
+        allBlocks = allBlocks.concat(childBlocks);
+      }
+    }
+
     cursor = response.has_more ? response.next_cursor : null;
   } while (cursor);
 

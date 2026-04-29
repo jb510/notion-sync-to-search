@@ -1,17 +1,17 @@
 # Notion Sync To Search
 
-OpenClaw skill for mirroring selected Notion pages into a local read-only markdown knowledge base so QMD/Lossless can search them.
+OpenClaw skill for using Notion as an auxiliary searchable knowledge base by mirroring Notion pages into local read-only markdown for QMD/Lossless search.
 
 ## Why this exists
 
-Notion is a good source of truth, but live API search is not a great full-text knowledge-base search layer for OpenClaw. This skill pulls selected Notion pages into local markdown so normal OpenClaw memory/search tools can find them.
+Notion is a good source of truth, but live API search is not a great full-text knowledge-base search layer for OpenClaw. This skill pulls Notion pages into local markdown so normal OpenClaw memory/search tools can find them.
 
 The local files are cache, not canonical content.
 
 ## Policy
 
 - Notion is source of truth.
-- Local markdown lives under `knowledge/Notion Read-only/`.
+- Local markdown lives under `knowledge/notion-sync-read-only/`.
 - Local markdown is read-only cache for search.
 - Edits go to Notion directly.
 - Refresh the mirror after edits.
@@ -30,6 +30,22 @@ cp config/notion-search-mirror.example.json config/notion-search-mirror.json
 node scripts/mirror-config.js config/notion-search-mirror.json
 ```
 
+To mirror every page the integration can see, set:
+
+```json
+{
+  "workspace": {
+    "enabled": true,
+    "query": "",
+    "limit": 500
+  }
+}
+```
+
+This is bounded and permission-scoped. It mirrors what Notion search returns for the integration, not necessarily every private page in the human user's Notion account.
+
+Bulk workspace/database mirrors use filenames like `Topic - 3133f788.md` so duplicate Notion titles do not overwrite each other.
+
 ## OpenClaw/QMD
 
 Add the mirror folder to QMD searchable paths for each install:
@@ -40,7 +56,7 @@ Add the mirror folder to QMD searchable paths for each install:
     "backend": "qmd",
     "qmd": {
       "includeDefaultMemory": true,
-      "paths": ["knowledge/Notion Read-only"]
+      "paths": ["knowledge/notion-sync-read-only"]
     }
   }
 }
@@ -51,11 +67,12 @@ Use the correct absolute/workspace-relative path for your OpenClaw install.
 ## Included scripts
 
 - `scripts/mirror-page.js` - pull one Notion page into read-only markdown with frontmatter
-- `scripts/mirror-config.js` - pull configured pages/databases
+- `scripts/mirror-config.js` - pull configured pages/databases or integration-visible workspace results
 - `scripts/search-notion.js` - live Notion title/object search
 - `scripts/query-database.js` - query a Notion database/data source
 - `scripts/get-database-schema.js` - inspect database schema
 - `scripts/notion-to-md.js` - lower-level page-to-markdown export
 
-This repo intentionally does not include realtime or two-way sync.
+The markdown exporter walks nested child blocks and captures common searchable block types including headings, paragraphs, lists, todos, toggles, code, quotes, callouts, child page/database titles, links, media captions/URLs, and table rows.
 
+This repo intentionally does not include realtime or two-way sync.

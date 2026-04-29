@@ -13,6 +13,8 @@ All scripts require a Notion integration token. Supported sources, in priority o
 
 Credentials are never accepted as bare positional CLI arguments.
 
+The scripts use Notion API version `2026-03-11` by default. Override with `NOTION_VERSION` only if an install needs to pin an older API version temporarily.
+
 ## JSON Output
 
 All scripts support `--json`.
@@ -34,7 +36,7 @@ node scripts/mirror-page.js <page-id> [--out-dir <dir>] [--path <relative-path>]
 Default output directory:
 
 ```text
-knowledge/Notion Read-only/
+knowledge/notion-sync-read-only/
 ```
 
 Output files include frontmatter:
@@ -53,7 +55,7 @@ mirrored_at: "..."
 The script also updates:
 
 ```text
-knowledge/Notion Read-only/.notion-search-mirror.json
+knowledge/notion-sync-read-only/.notion-search-mirror.json
 ```
 
 ### `mirror-config.js`
@@ -68,7 +70,13 @@ Config shape:
 
 ```json
 {
-  "outDir": "knowledge/Notion Read-only",
+  "outDir": "knowledge/notion-sync-read-only",
+  "workspace": {
+    "enabled": false,
+    "query": "",
+    "pathPrefix": "Workspace",
+    "limit": 500
+  },
   "pages": [
     {
       "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
@@ -86,6 +94,10 @@ Config shape:
 ```
 
 Database entries may include Notion API `filter` and `sorts` payloads.
+
+Set `workspace.enabled` to `true` to mirror pages returned by Notion search for the current integration. This is permission-scoped and bounded by `workspace.limit`.
+
+Generated database/workspace paths include a short page ID suffix, such as `Workspace/Topic - 3133f788.md`, so duplicate titles do not overwrite unrelated pages. Explicit `pages[].path` values are respected exactly.
 
 ## Live Notion Read Helpers
 
@@ -135,6 +147,8 @@ Lower-level page export. Prefer `mirror-page.js` for search mirrors because it a
 node scripts/notion-to-md.js <page-id> [output-file] [--json]
 ```
 
+The shared exporter walks nested child blocks and converts common searchable block types, including headings, paragraphs, lists, todos, toggles, code, quotes, callouts, child page/database titles, links, media captions/URLs, and table rows.
+
 ## Path Safety
 
 Scripts that write files refuse to write outside the current working directory by default. Use `--allow-unsafe-paths` only when you intentionally need to override that guardrail.
@@ -149,4 +163,3 @@ This skill intentionally does not include:
 - automatic Notion writes from mirror files
 
 Use the bundled `notion` skill or direct Notion API tools for Notion edits, then refresh this search mirror.
-

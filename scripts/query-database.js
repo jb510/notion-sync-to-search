@@ -8,6 +8,7 @@
 const {
   checkApiKey,
   notionRequest,
+  normalizeId,
   extractPropertyValue,
   stripTokenArg,
   hasJsonFlag,
@@ -16,30 +17,47 @@ const {
 
 checkApiKey();
 
-async function queryDatabase(databaseId, filter = null, sorts = null, pageSize = 10) {
-  log(`Fetching database info: ${databaseId}`);
-  const dbInfo = await notionRequest(`/v1/databases/${databaseId}`, 'GET');
+function parseLimit(value, defaultValue = 10, maxValue = 10000) {
+  const parsed = Number.parseInt(value ?? defaultValue, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return defaultValue;
+  return Math.min(parsed, maxValue);
+}
 
-  // Use data_source_id if available (Notion API 2025-09-03)
+async function queryDatabase(databaseId, filter = null, sorts = null, limit = 10) {
+  const normalizedDatabaseId = normalizeId(databaseId);
+  const targetLimit = parseLimit(limit, 10, 10000);
+
+  log(`Fetching database info: ${normalizedDatabaseId}`);
+  const dbInfo = await notionRequest(`/v1/databases/${encodeURIComponent(normalizedDatabaseId)}`, 'GET');
+
+  // Use data_source_id when the database object exposes data sources.
   const dataSourceId = dbInfo.data_sources && dbInfo.data_sources.length > 0
     ? dbInfo.data_sources[0].id
-    : databaseId;
+    : normalizedDatabaseId;
 
   log(`Querying data source: ${dataSourceId}`);
 
-  const payload = { page_size: pageSize };
-  if (filter) {
-    payload.filter = filter;
-    log(`Filter: ${JSON.stringify(filter, null, 2)}`);
-  }
-  if (sorts) {
-    payload.sorts = sorts;
-    log(`Sort: ${JSON.stringify(sorts, null, 2)}`);
-  }
+  const pages = [];
+  let cursor = null;
 
-  const result = await notionRequest(`/v1/data_sources/${dataSourceId}/query`, 'POST', payload);
+  do {
+    const payload = { page_size: Math.min(targetLimit - pages.length, 100) };
+    if (cursor) payload.start_cursor = cursor;
+    if (filter) {
+      payload.filter = filter;
+      log(`Filter: ${JSON.stringify(filter, null, 2)}`);
+    }
+    if (sorts) {
+      payload.sorts = sorts;
+      log(`Sort: ${JSON.stringify(sorts, null, 2)}`);
+    }
 
-  return result.results.map(page => {
+    const result = await notionRequest(`/v1/data_sources/${encodeURIComponent(dataSourceId)}/query`, 'POST', payload);
+    pages.push(...result.results);
+    cursor = result.has_more && pages.length < targetLimit ? result.next_cursor : null;
+  } while (cursor && pages.length < targetLimit);
+
+  return pages.map(page => {
     const properties = {};
     for (const [key, value] of Object.entries(page.properties)) {
       properties[key] = extractPropertyValue(value);
@@ -80,7 +98,7 @@ async function main() {
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--filter' && args[i + 1]) { filter = JSON.parse(args[++i]); }
     else if (args[i] === '--sort' && args[i + 1]) { sorts = JSON.parse(args[++i]); }
-    else if (args[i] === '--limit' && args[i + 1]) { limit = parseInt(args[++i]); }
+    else if (args[i] === '--limit' && args[i + 1]) { limit = parseLimit(args[++i]); }
   }
 
   try {

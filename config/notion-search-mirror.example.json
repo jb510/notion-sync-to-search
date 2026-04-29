@@ -1,5 +1,11 @@
 {
-  "outDir": "knowledge/Notion Read-only",
+  "outDir": "knowledge/notion-sync-read-only",
+  "workspace": {
+    "enabled": false,
+    "query": "",
+    "pathPrefix": "Workspace",
+    "limit": 500
+  },
   "pages": [
     {
       "pageId": "3133f788-993c-8137-b51c-db4f312e9500",
@@ -14,4 +20,3 @@
     }
   ]
 }
-

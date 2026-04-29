@@ -23,6 +23,7 @@ function usage(exitCode = 0) {
   console.log('Config shape:');
   console.log(JSON.stringify({
     outDir: DEFAULT_OUT_DIR,
+    workspace: { enabled: false, query: '', pathPrefix: 'Workspace', limit: 500 },
     pages: [{ pageId: '...', path: '00 Index/Page.md' }],
     databases: [{ databaseId: '...', pathPrefix: '05 Research Library', limit: 100 }],
   }, null, 2));
@@ -58,13 +59,28 @@ function sanitizeRelativePathPrefix(value) {
     .join(path.sep);
 }
 
+function parseLimit(value, defaultValue, maxValue) {
+  const parsed = Number.parseInt(value ?? defaultValue, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return defaultValue;
+  return Math.min(parsed, maxValue);
+}
+
+function shortPageId(pageId) {
+  return normalizeId(pageId).replace(/-/g, '').slice(0, 8);
+}
+
+function generatedMirrorPath(prefix, title, pageId) {
+  const filename = `${sanitizePathSegment(title)} - ${shortPageId(pageId)}.md`;
+  return prefix ? path.join(prefix, filename) : filename;
+}
+
 async function getDatabaseQueryTarget(databaseId) {
   const dbInfo = await notionRequest(`/v1/databases/${encodeURIComponent(normalizeId(databaseId))}`, 'GET');
   return dbInfo.data_sources?.[0]?.id || normalizeId(databaseId);
 }
 
 async function queryDatabasePages(databaseConfig) {
-  const limit = Math.max(1, Math.min(parseInt(databaseConfig.limit || 100, 10), 100));
+  const limit = parseLimit(databaseConfig.limit, 100, 10000);
   const targetId = await getDatabaseQueryTarget(databaseConfig.databaseId);
   const pages = [];
   let cursor = null;
@@ -76,6 +92,28 @@ async function queryDatabasePages(databaseConfig) {
     if (databaseConfig.sorts || databaseConfig.sort) payload.sorts = databaseConfig.sorts || databaseConfig.sort;
 
     const result = await notionRequest(`/v1/data_sources/${encodeURIComponent(targetId)}/query`, 'POST', payload);
+    pages.push(...result.results);
+    cursor = result.has_more && pages.length < limit ? result.next_cursor : null;
+  } while (cursor && pages.length < limit);
+
+  return pages;
+}
+
+async function searchWorkspacePages(workspaceConfig) {
+  const limit = parseLimit(workspaceConfig.limit, 500, 5000);
+  const pages = [];
+  let cursor = null;
+
+  do {
+    const payload = {
+      page_size: Math.min(limit - pages.length, 100),
+      filter: { property: 'object', value: 'page' },
+    };
+    if (workspaceConfig.query) payload.query = workspaceConfig.query;
+    if (cursor) payload.start_cursor = cursor;
+    if (workspaceConfig.sort) payload.sort = workspaceConfig.sort;
+
+    const result = await notionRequest('/v1/search', 'POST', payload);
     pages.push(...result.results);
     cursor = result.has_more && pages.length < limit ? result.next_cursor : null;
   } while (cursor && pages.length < limit);
@@ -97,6 +135,21 @@ async function mirrorConfig(config) {
   const outDir = config.outDir || DEFAULT_OUT_DIR;
   const results = [];
 
+  if (config.workspace?.enabled) {
+    const pages = await searchWorkspacePages(config.workspace);
+    const prefix = config.workspace.pathPrefix ? sanitizeRelativePathPrefix(config.workspace.pathPrefix) : '';
+
+    for (const page of pages) {
+      const title = titleFromPageResult(page);
+      const relativePath = generatedMirrorPath(prefix, title, page.id);
+      results.push(await mirrorPage({
+        pageId: page.id,
+        outDir,
+        relativePath,
+      }));
+    }
+  }
+
   for (const page of config.pages || []) {
     if (!page.pageId) throw new Error('Each pages[] entry requires pageId');
     results.push(await mirrorPage({
@@ -113,7 +166,7 @@ async function mirrorConfig(config) {
 
     for (const page of pages) {
       const title = titleFromPageResult(page);
-      const relativePath = path.join(prefix, `${sanitizePathSegment(title)}.md`);
+      const relativePath = generatedMirrorPath(prefix, title, page.id);
       results.push(await mirrorPage({
         pageId: page.id,
         outDir,

@@ -16,18 +16,35 @@ const {
 
 checkApiKey();
 
-async function searchNotion(query, filter = null, pageSize = 10) {
-  const payload = { query, page_size: pageSize };
+function parseLimit(value, defaultValue = 10, maxValue = 500) {
+  const parsed = Number.parseInt(value ?? defaultValue, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return defaultValue;
+  return Math.min(parsed, maxValue);
+}
 
-  if (filter) {
-    payload.filter = { property: 'object', value: filter };
-  }
+async function searchNotion(query, filter = null, limit = 10) {
+  const targetLimit = parseLimit(limit, 10, 500);
+  const results = [];
+  let cursor = null;
 
-  log(`Searching for: "${query}"${filter ? ` (filter: ${filter})` : ''}`);
+  do {
+    const payload = {
+      query,
+      page_size: Math.min(targetLimit - results.length, 100),
+    };
 
-  const result = await notionRequest('/v1/search', 'POST', payload);
+    if (filter) {
+      payload.filter = { property: 'object', value: filter };
+    }
+    if (cursor) payload.start_cursor = cursor;
 
-  return result.results.map(item => ({
+    log(`Searching for: "${query}"${filter ? ` (filter: ${filter})` : ''}`);
+    const result = await notionRequest('/v1/search', 'POST', payload);
+    results.push(...result.results);
+    cursor = result.has_more && results.length < targetLimit ? result.next_cursor : null;
+  } while (cursor && results.length < targetLimit);
+
+  return results.map(item => ({
     id: item.id,
     object: item.object,
     title: extractTitle(item),
@@ -61,7 +78,7 @@ async function main() {
 
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--filter' && args[i + 1]) { filter = args[++i]; }
-    else if (args[i] === '--limit' && args[i + 1]) { limit = parseInt(args[++i]); }
+    else if (args[i] === '--limit' && args[i + 1]) { limit = parseLimit(args[++i]); }
   }
 
   try {

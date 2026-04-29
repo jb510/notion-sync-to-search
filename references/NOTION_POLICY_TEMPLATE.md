@@ -7,7 +7,7 @@ The shared `notion-sync-to-search` skill should stay generic. Put install-specif
 ## Source Of Truth
 
 - Notion is the source of truth.
-- Local files under `knowledge/Notion Read-only/` are generated search cache.
+- Local files under `knowledge/notion-sync-read-only/` are generated search cache.
 - Do not edit the mirror directly.
 
 ## Canonical Root
@@ -53,4 +53,3 @@ After creating or updating Notion content, return:
 - bucket/path
 - new vs updated
 - mirror refresh status, if refreshed
-
