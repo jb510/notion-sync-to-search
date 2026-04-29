@@ -6,6 +6,7 @@ const { execFileSync } = require('node:child_process');
 const test = require('node:test');
 const { getApiKey, _resetTokenCache } = require('../scripts/notion-utils.js');
 const { _internal } = require('../scripts/mirror-config.js');
+const { _internal: openclawInternal } = require('../scripts/install-openclaw-memory.js');
 
 const repo = path.resolve(__dirname, '..');
 const cli = path.join(repo, 'scripts', 'mirror-config.js');
@@ -149,4 +150,34 @@ test('manifest entry cache hit requires regular file', () => {
 
   assert.equal(_internal.manifestEntryFileExists(dir, { path: regularFile }), true);
   assert.equal(_internal.manifestEntryFileExists(dir, { path: directoryPath }), false);
+});
+
+test('openclaw memory helper links agent workspaces to one mirror', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const primary = path.join(dir, 'workspace');
+  const coding = path.join(dir, 'workspace-coding');
+  const configPath = path.join(dir, 'openclaw.json');
+  fs.mkdirSync(path.join(primary, 'notion-sync-read-only'), { recursive: true });
+  fs.mkdirSync(coding, { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
+    agents: {
+      list: [
+        { id: 'main', workspace: primary },
+        { id: 'coding', workspace: coding },
+      ],
+    },
+  }));
+
+  const result = openclawInternal.run([
+    '--config', configPath,
+    '--workspace', primary,
+    '--mirror-path', 'notion-sync-read-only',
+    '--link-agent-workspaces',
+    '--json',
+  ]);
+  const updated = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.deepEqual(updated.agents.defaults.memorySearch.extraPaths, ['notion-sync-read-only']);
+  assert.equal(fs.lstatSync(path.join(coding, 'notion-sync-read-only')).isSymbolicLink(), true);
+  assert.equal(result.links.some(link => link.agentId === 'coding' && link.action === 'linked'), true);
 });

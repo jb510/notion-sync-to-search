@@ -10,7 +10,8 @@
   "bin": {
     "notion-mirror-page": "scripts/mirror-page.js",
     "notion-mirror-config": "scripts/mirror-config.js",
-    "notion-install-scheduler": "scripts/install-scheduler.js"
+    "notion-install-scheduler": "scripts/install-scheduler.js",
+    "notion-install-openclaw-memory": "scripts/install-openclaw-memory.js"
   },
   "scripts": {
     "test": "node --test"

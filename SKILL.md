@@ -394,6 +394,19 @@ For example, an install may say: "Do not invent top-level folders; use the exist
 
 The mirror folder should be included in whichever OpenClaw memory/search backend indexes local markdown for the install. QMD is one supported example, not a requirement.
 
+For OpenClaw installs with multiple agent workspaces, prefer the included helper from the primary workspace that contains the synced mirror:
+
+```bash
+cd ~/.openclaw/workspace
+node {baseDir}/scripts/install-openclaw-memory.js \
+  --config ~/.openclaw/openclaw.json \
+  --workspace ~/.openclaw/workspace \
+  --mirror-path notion-sync-read-only \
+  --link-agent-workspaces
+```
+
+The helper adds `notion-sync-read-only` to `agents.defaults.memorySearch.extraPaths`. With `--link-agent-workspaces`, it also links each configured agent workspace back to the same read-only mirror because OpenClaw resolves relative `extraPaths` from each agent workspace. It refuses to overwrite non-empty existing paths and backs up `openclaw.json` before editing it.
+
 Example QMD shape:
 
 ```json

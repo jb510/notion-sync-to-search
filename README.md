@@ -292,6 +292,19 @@ The scripts are deliberately conservative with the Notion API:
 
 Add the mirror folder to whichever OpenClaw memory/search backend indexes local markdown for each install. QMD is one supported example, not a requirement.
 
+For OpenClaw installs with multiple agent workspaces, use the helper script from the primary workspace that contains the synced mirror:
+
+```bash
+cd ~/.openclaw/workspace
+node skills/notion-sync-to-search/scripts/install-openclaw-memory.js \
+  --config ~/.openclaw/openclaw.json \
+  --workspace ~/.openclaw/workspace \
+  --mirror-path notion-sync-read-only \
+  --link-agent-workspaces
+```
+
+The helper adds `notion-sync-read-only` to `agents.defaults.memorySearch.extraPaths`. With `--link-agent-workspaces`, it also links each configured agent workspace back to the same read-only mirror because OpenClaw resolves relative `extraPaths` from each agent workspace. It refuses to overwrite non-empty existing paths and backs up `openclaw.json` before editing it.
+
 Example QMD config:
 
 ```json
@@ -313,6 +326,7 @@ Use the correct absolute/workspace-relative path for your OpenClaw install.
 - `scripts/mirror-page.js` - pull one Notion page into read-only markdown with frontmatter
 - `scripts/mirror-config.js` - pull configured pages/databases or integration-visible workspace results
 - `scripts/install-scheduler.js` - print or install launchd/systemd/cron scheduler entries
+- `scripts/install-openclaw-memory.js` - wire the mirror into OpenClaw memory/search config
 - `scripts/search-notion.js` - live Notion title/object search
 - `scripts/query-database.js` - query a Notion database/data source
 - `scripts/get-database-schema.js` - inspect database schema
