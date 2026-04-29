@@ -523,9 +523,11 @@ function blocksToMarkdown(blocks) {
       }
       case 'child_page':
         lines.push(`## ${content.title || 'Untitled child page'}`, '');
+        lines.push(`Notion child page: ${block.id}`, '');
         break;
       case 'child_database':
         lines.push(`## ${content.title || 'Untitled child database'}`, '');
+        lines.push(`Notion child database: ${block.id}`, '');
         break;
       case 'bookmark':
       case 'embed':
@@ -555,6 +557,13 @@ function blocksToMarkdown(blocks) {
 }
 
 // --- Notion Page Helpers ---
+
+function shouldFetchBlockChildren(block, options = {}) {
+  if (!block?.has_children) return false;
+  if (block.type === 'child_page') return options.expandChildPages === true;
+  if (block.type === 'child_database') return options.expandChildDatabases === true;
+  return true;
+}
 
 /**
  * Fetch all blocks from a page/block, handling pagination
@@ -595,7 +604,7 @@ async function getAllBlocks(blockId, options = {}) {
         throw error;
       }
       allBlocks.push(block);
-      if (block.has_children) {
+      if (shouldFetchBlockChildren(block, options)) {
         const remaining = maxBlocks - allBlocks.length;
         const childBlocks = await getAllBlocks(block.id, { ...options, maxBlocks: remaining });
         allBlocks = allBlocks.concat(childBlocks);
@@ -644,6 +653,7 @@ module.exports = {
 
   // Page helpers
   getAllBlocks,
+  shouldFetchBlockChildren,
 
   // Testing
   _resetTokenCache: () => { _cachedToken = undefined; },

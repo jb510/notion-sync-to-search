@@ -288,6 +288,7 @@ The scripts are deliberately conservative with the Notion API:
 - Search, data-source query, and block-children requests use paginated requests with `page_size` no higher than 100.
 - Request bodies are rejected locally if they exceed Notion's 500KB payload limit.
 - Individual pages are bounded by `maxBlocksPerPage`, `maxSecondsPerPage`, and `maxMarkdownBytesPerPage`; exceeded pages are recorded as page-level sync errors while the rest of the run continues.
+- Child pages and child databases are kept as references in the parent page export. Their content is mirrored as separate pages when visible to the integration, so search hits are attributed to the page where the content actually lives instead of a higher-level index page.
 - Local page content is not sent back to Notion; this skill only reads from Notion and writes local markdown cache.
 
 ## OpenClaw Memory/Search

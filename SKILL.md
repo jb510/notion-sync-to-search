@@ -360,6 +360,7 @@ The mirror scripts follow Notion's documented API limits:
 - Search, data-source query, and block-children calls use cursor pagination with `page_size` no higher than 100.
 - Request bodies larger than Notion's 500KB payload limit are rejected before sending.
 - Individual page exports are bounded by `maxBlocksPerPage`, `maxSecondsPerPage`, and `maxMarkdownBytesPerPage`; oversized or slow pages are recorded as page-level sync errors instead of aborting the whole workspace.
+- Child pages and child databases are kept as references in the parent page export. Their content is mirrored as separate pages when visible to the integration, so search hits are attributed to the page where the content actually lives instead of a higher-level index page.
 - This skill sends only search/query/read requests to Notion. It does not upload local markdown content back to Notion.
 
 ## Search Workflow

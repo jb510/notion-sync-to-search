@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const test = require('node:test');
-const { getAllBlocks, getApiKey, _resetTokenCache } = require('../scripts/notion-utils.js');
+const { blocksToMarkdown, getAllBlocks, getApiKey, shouldFetchBlockChildren, _resetTokenCache } = require('../scripts/notion-utils.js');
 const { _internal } = require('../scripts/mirror-config.js');
 const { _internal: openclawInternal } = require('../scripts/install-openclaw-memory.js');
 
@@ -185,6 +185,32 @@ test('expired block deadline fails before network access', async () => {
     () => getAllBlocks('3193f788-993c-81f3-a066-ccb43c832b89', { deadlineMs: Date.now() - 1 }),
     /Page block fetch timed out/,
   );
+});
+
+test('child pages remain references instead of recursive inline content by default', () => {
+  const childPage = {
+    id: '349bb4fe-9887-8149-827f-dc0f3c7a4f6e',
+    type: 'child_page',
+    has_children: true,
+    child_page: { title: 'OPEN CLAW MAIN BRAIN' },
+  };
+  const childDatabase = {
+    id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    type: 'child_database',
+    has_children: true,
+    child_database: { title: 'Research Database' },
+  };
+
+  assert.equal(shouldFetchBlockChildren(childPage), false);
+  assert.equal(shouldFetchBlockChildren(childDatabase), false);
+  assert.equal(shouldFetchBlockChildren(childPage, { expandChildPages: true }), true);
+  assert.equal(shouldFetchBlockChildren({ type: 'toggle', has_children: true }), true);
+
+  const markdown = blocksToMarkdown([childPage, childDatabase]);
+  assert.match(markdown, /## OPEN CLAW MAIN BRAIN/);
+  assert.match(markdown, /Notion child page: 349bb4fe-9887-8149-827f-dc0f3c7a4f6e/);
+  assert.match(markdown, /## Research Database/);
+  assert.match(markdown, /Notion child database: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/);
 });
 
 test('openclaw memory helper links agent workspaces to one mirror', () => {
