@@ -326,6 +326,7 @@ Use `limits` to prevent runaway syncs:
   "limits": {
     "maxPages": 5000,
     "maxBlocksPerPage": 20000,
+    "maxSecondsPerPage": 120,
     "maxMarkdownBytesPerPage": 5242880,
     "maxRunMinutes": 60
   }
@@ -358,6 +359,7 @@ The mirror scripts follow Notion's documented API limits:
 - HTTP 429 responses are retried after the `Retry-After` interval returned by Notion.
 - Search, data-source query, and block-children calls use cursor pagination with `page_size` no higher than 100.
 - Request bodies larger than Notion's 500KB payload limit are rejected before sending.
+- Individual page exports are bounded by `maxBlocksPerPage`, `maxSecondsPerPage`, and `maxMarkdownBytesPerPage`; oversized or slow pages are recorded as page-level sync errors instead of aborting the whole workspace.
 - This skill sends only search/query/read requests to Notion. It does not upload local markdown content back to Notion.
 
 ## Search Workflow

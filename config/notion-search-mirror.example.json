@@ -11,6 +11,7 @@
   "limits": {
     "maxPages": 5000,
     "maxBlocksPerPage": 20000,
+    "maxSecondsPerPage": 120,
     "maxMarkdownBytesPerPage": 5242880,
     "maxRunMinutes": 60
   },

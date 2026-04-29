@@ -180,6 +180,13 @@ test('block limit of zero does not reset to unbounded recursion', async () => {
   );
 });
 
+test('expired block deadline fails before network access', async () => {
+  await assert.rejects(
+    () => getAllBlocks('3193f788-993c-81f3-a066-ccb43c832b89', { deadlineMs: Date.now() - 1 }),
+    /Page block fetch timed out/,
+  );
+});
+
 test('openclaw memory helper links agent workspaces to one mirror', () => {
   const dir = tmpdir();
   test.after(() => fs.rmSync(dir, { recursive: true, force: true }));

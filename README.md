@@ -241,6 +241,7 @@ Optional safety limits:
   "limits": {
     "maxPages": 5000,
     "maxBlocksPerPage": 20000,
+    "maxSecondsPerPage": 120,
     "maxMarkdownBytesPerPage": 5242880,
     "maxRunMinutes": 60
   }
@@ -286,6 +287,7 @@ The scripts are deliberately conservative with the Notion API:
 - HTTP 429 responses are retried using Notion's `Retry-After` header.
 - Search, data-source query, and block-children requests use paginated requests with `page_size` no higher than 100.
 - Request bodies are rejected locally if they exceed Notion's 500KB payload limit.
+- Individual pages are bounded by `maxBlocksPerPage`, `maxSecondsPerPage`, and `maxMarkdownBytesPerPage`; exceeded pages are recorded as page-level sync errors while the rest of the run continues.
 - Local page content is not sent back to Notion; this skill only reads from Notion and writes local markdown cache.
 
 ## OpenClaw Memory/Search

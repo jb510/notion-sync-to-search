@@ -215,6 +215,9 @@ async function mirrorPage(options) {
 
   const blocks = await getAllBlocks(pageId, {
     maxBlocks: options.limits?.maxBlocksPerPage,
+    deadlineMs: options.limits?.maxSecondsPerPage
+      ? Date.now() + options.limits.maxSecondsPerPage * 1000
+      : null,
   });
   const markdown = blocksToMarkdown(blocks);
   const maxBytes = options.limits?.maxMarkdownBytesPerPage;

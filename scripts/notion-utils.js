@@ -564,13 +564,23 @@ async function getAllBlocks(blockId, options = {}) {
   let allBlocks = [];
   let cursor = null;
   const maxBlocks = options.maxBlocks ?? Infinity;
-  if (maxBlocks <= 0) {
-    const error = new Error(`Block limit exceeded for ${blockId}; maxBlocksPerPage=${maxBlocks}`);
-    error.code = 'BLOCK_LIMIT_EXCEEDED';
-    throw error;
-  }
+  const deadlineMs = options.deadlineMs ?? null;
+  const assertBudget = () => {
+    if (maxBlocks <= 0) {
+      const error = new Error(`Block limit exceeded for ${blockId}; maxBlocksPerPage=${maxBlocks}`);
+      error.code = 'BLOCK_LIMIT_EXCEEDED';
+      throw error;
+    }
+    if (deadlineMs && Date.now() > deadlineMs) {
+      const error = new Error(`Page block fetch timed out for ${blockId}`);
+      error.code = 'PAGE_BLOCK_FETCH_TIMEOUT';
+      throw error;
+    }
+  };
+  assertBudget();
 
   do {
+    assertBudget();
     const encodedId = encodeURIComponent(normalizedId);
     const params = new URLSearchParams({ page_size: '100' });
     if (cursor) params.set('start_cursor', cursor);
@@ -578,6 +588,7 @@ async function getAllBlocks(blockId, options = {}) {
     const response = await notionRequest(path, 'GET');
 
     for (const block of response.results) {
+      assertBudget();
       if (allBlocks.length >= maxBlocks) {
         const error = new Error(`Block limit exceeded for ${blockId}; maxBlocksPerPage=${maxBlocks}`);
         error.code = 'BLOCK_LIMIT_EXCEEDED';

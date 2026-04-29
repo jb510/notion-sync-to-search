@@ -135,6 +135,7 @@ function parseLimits(config) {
   return {
     maxPages: parseLimit(limits.maxPages, 5000, 100000),
     maxBlocksPerPage: parseLimit(limits.maxBlocksPerPage, 20000, 1000000),
+    maxSecondsPerPage: parseLimit(limits.maxSecondsPerPage, 120, 60 * 60),
     maxMarkdownBytesPerPage: parseLimit(limits.maxMarkdownBytesPerPage, 5 * 1024 * 1024, 100 * 1024 * 1024),
     maxRunMinutes: parseLimit(limits.maxRunMinutes, 60, 24 * 60),
   };
