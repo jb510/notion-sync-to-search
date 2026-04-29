@@ -1,7 +1,7 @@
 {
   "name": "notion-sync-to-search",
   "version": "0.1.0",
-  "description": "Mirror Notion into local read-only markdown so OpenClaw/QMD can use Notion as an auxiliary searchable knowledge base.",
+  "description": "Mirror Notion into local read-only markdown so OpenClaw memory/search can use Notion as an auxiliary searchable knowledge base.",
   "license": "MIT-0",
   "repository": {
     "type": "git",

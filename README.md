@@ -1,6 +1,6 @@
 # Notion Sync To Search
 
-OpenClaw skill for using Notion as an auxiliary searchable knowledge base by mirroring Notion pages into local read-only markdown for QMD/Lossless search.
+OpenClaw skill for using Notion as an auxiliary searchable knowledge base by mirroring Notion pages into local read-only markdown for OpenClaw memory/search.
 
 ## Why this exists
 
@@ -56,9 +56,11 @@ This is bounded and permission-scoped. It mirrors what Notion search returns for
 
 Bulk workspace/database mirrors use filenames like `Topic - 3133f788.md` so duplicate Notion titles do not overwrite each other.
 
-## OpenClaw/QMD
+## OpenClaw Memory/Search
 
-Add the mirror folder to QMD searchable paths for each install:
+Add the mirror folder to whichever OpenClaw memory/search backend indexes local markdown for each install. QMD is one supported example, not a requirement.
+
+Example QMD config:
 
 ```json
 {

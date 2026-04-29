@@ -1,6 +1,6 @@
 ---
 name: notion-sync-to-search
-description: Use Notion as an auxiliary OpenClaw knowledge base by mirroring integration-visible Notion pages into local read-only markdown for QMD/Lossless search while keeping Notion as the source of truth. Use when Notion content should be searchable locally, when refreshing the read-only Notion search mirror, or when tracing a local search hit back to the live Notion page before editing.
+description: Use Notion as an auxiliary OpenClaw knowledge base by mirroring integration-visible Notion pages into local read-only markdown for OpenClaw memory/search while keeping Notion as the source of truth. Use when Notion content should be searchable locally, when refreshing the read-only Notion search mirror, or when tracing a local search hit back to the live Notion page before editing.
 homepage: https://github.com/jb510/notion-sync-to-search
 repository: https://github.com/jb510/notion-sync-to-search
 license: MIT-0
@@ -9,7 +9,7 @@ metadata: {"openclaw":{"requires":{"env":["NOTION_API_KEY"],"bins":["node"]},"pr
 
 # Notion Sync To Search
 
-Mirror Notion content into local markdown so OpenClaw/QMD can use Notion as an auxiliary searchable knowledge base without treating local files as the source of truth.
+Mirror Notion content into local markdown so OpenClaw memory/search can use Notion as an auxiliary searchable knowledge base without treating local files as the source of truth.
 
 This skill exists because Notion is good as a canonical workspace, but local OpenClaw search works best over local text. The mirror gives agents fast semantic/local search over Notion-derived knowledge while preserving a hard boundary: all edits go back to Notion.
 
@@ -38,7 +38,7 @@ The folder name is intentional. Humans and agents should treat files inside it a
 - Preserving Notion page IDs, URLs, and timestamps in frontmatter.
 - Keeping a local manifest of mirrored pages.
 - Generating collision-resistant filenames for bulk mirrors by including a short Notion page ID.
-- Letting QMD/Lossless search Notion-derived knowledge as normal local markdown.
+- Letting OpenClaw memory/search index Notion-derived knowledge as normal local markdown.
 - Routing edits back to the live Notion page.
 
 ## What This Skill Is Not For
@@ -177,7 +177,7 @@ The default `syncScope` is `selected`. Whole workspace mirroring is not the defa
 
 ## Search Workflow
 
-1. Search QMD/Lossless as usual.
+1. Search OpenClaw memory/search as usual.
 2. If a result is under `notion-sync-read-only/`, read its frontmatter.
 3. Use `notion_page_id` to fetch the current Notion page.
 4. Edit Notion directly.
@@ -205,9 +205,11 @@ Good local policy should define:
 
 For example, an install may say: "Do not invent top-level folders; use the existing Knowledge Base Root and route into existing buckets."
 
-## QMD / Memory Search
+## Memory Search
 
-The mirror folder should be included in OpenClaw/QMD searchable paths. Example shape:
+The mirror folder should be included in whichever OpenClaw memory/search backend indexes local markdown for the install. QMD is one supported example, not a requirement.
+
+Example QMD shape:
 
 ```json
 {
