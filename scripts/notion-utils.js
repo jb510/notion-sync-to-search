@@ -563,7 +563,12 @@ async function getAllBlocks(blockId, options = {}) {
   const normalizedId = normalizeId(blockId);
   let allBlocks = [];
   let cursor = null;
-  const maxBlocks = options.maxBlocks || Infinity;
+  const maxBlocks = options.maxBlocks ?? Infinity;
+  if (maxBlocks <= 0) {
+    const error = new Error(`Block limit exceeded for ${blockId}; maxBlocksPerPage=${maxBlocks}`);
+    error.code = 'BLOCK_LIMIT_EXCEEDED';
+    throw error;
+  }
 
   do {
     const encodedId = encodeURIComponent(normalizedId);

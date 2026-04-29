@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const test = require('node:test');
-const { getApiKey, _resetTokenCache } = require('../scripts/notion-utils.js');
+const { getAllBlocks, getApiKey, _resetTokenCache } = require('../scripts/notion-utils.js');
 const { _internal } = require('../scripts/mirror-config.js');
 const { _internal: openclawInternal } = require('../scripts/install-openclaw-memory.js');
 
@@ -171,6 +171,13 @@ test('page sync errors are recorded as page-level entries', () => {
   assert.equal(entry.syncStatus, 'error');
   assert.equal(entry.relativePath, 'Huge Page - 3193f788.md');
   assert.match(entry.error, /Block limit exceeded/);
+});
+
+test('block limit of zero does not reset to unbounded recursion', async () => {
+  await assert.rejects(
+    () => getAllBlocks('3193f788-993c-81f3-a066-ccb43c832b89', { maxBlocks: 0 }),
+    /Block limit exceeded/,
+  );
 });
 
 test('openclaw memory helper links agent workspaces to one mirror', () => {
