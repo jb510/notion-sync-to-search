@@ -13,6 +13,7 @@ const {
   hasJsonFlag,
   log,
   resolveSafePath,
+  _resetTokenCache: resetTokenCache,
 } = require('./notion-utils.js');
 const {
   mirrorPage,
@@ -149,7 +150,7 @@ function generatedMirrorPath(prefix, title, pageId) {
 }
 
 function defaultPagePath(page) {
-  return `${sanitizePathSegment(titleFromPageResult(page))}.md`;
+  return generatedMirrorPath('', titleFromPageResult(page), page.id);
 }
 
 async function getDatabaseQueryTarget(databaseId) {
@@ -242,7 +243,9 @@ function shouldMirrorWorkspace(config) {
 function manifestEntryFileExists(outDir, entry) {
   if (!entry?.path) return false;
   const filePath = resolveSafePath(entry.path, { mode: 'write' });
-  return isInside(outDir, filePath) && fs.existsSync(filePath) && !fs.lstatSync(filePath).isSymbolicLink();
+  if (!isInside(outDir, filePath) || !fs.existsSync(filePath)) return false;
+  const stat = fs.lstatSync(filePath);
+  return stat.isFile() && !stat.isSymbolicLink();
 }
 
 function entryMatchesExpectedPath(outDir, existingEntry, expectedRelativePath) {
@@ -493,7 +496,13 @@ function syncReport(config, options = {}) {
 }
 
 function workspaceConfigs(config) {
-  if (!Array.isArray(config.workspaces) || config.workspaces.length === 0) return [{ name: config.name || 'default', config }];
+  if (!Array.isArray(config.workspaces) || config.workspaces.length === 0) {
+    return [{
+      name: config.name || config.workspaceFolder || 'default',
+      tokenEnv: config.tokenEnv || null,
+      config,
+    }];
+  }
   const base = { ...config };
   delete base.workspaces;
   return config.workspaces.map((workspace, index) => ({
@@ -536,20 +545,23 @@ function assertSyncTokens(config) {
 }
 
 async function withWorkspaceToken(workspace, fn) {
-  if (!workspace.tokenEnv) return fn();
   const previous = process.env.NOTION_API_KEY;
-  if (process.env[workspace.tokenEnv]) process.env.NOTION_API_KEY = process.env[workspace.tokenEnv];
+  if (workspace.tokenEnv) process.env.NOTION_API_KEY = process.env[workspace.tokenEnv];
+  resetTokenCache();
   try {
     return await fn();
   } finally {
     if (previous === undefined) delete process.env.NOTION_API_KEY;
     else process.env.NOTION_API_KEY = previous;
+    resetTokenCache();
   }
 }
 
 async function mirrorConfigAll(config, options = {}) {
   const workspaces = workspaceConfigs(config);
-  if (workspaces.length === 1) return mirrorConfig(workspaces[0].config, options);
+  if (workspaces.length === 1) {
+    return withWorkspaceToken(workspaces[0], () => mirrorConfig(workspaces[0].config, options));
+  }
   const results = [];
   for (const workspace of workspaces) {
     const result = await withWorkspaceToken(workspace, () => mirrorConfig(workspace.config, options));
@@ -622,15 +634,17 @@ async function doctor(config, options = {}) {
   } catch (error) {
     add('local manifests', false, error.message);
   }
-  for (const status of workspaceTokenStatus(config)) {
+  const workspaces = workspaceConfigs(config);
+  for (const workspace of workspaces) {
+    const status = workspaceTokenStatus(workspace.config)[0];
     add(`api token: ${status.name}`, status.present, status.present ? `${status.tokenEnv} is set` : `${status.tokenEnv} is missing`);
-  }
-  if (process.env.NOTION_API_KEY) {
-    try {
-      const info = await getWorkspaceInfo();
-      add('notion api', true, info.workspaceName || info.botName || 'connected');
-    } catch (error) {
-      add('notion api', false, error.message);
+    if (status.present) {
+      try {
+        const info = await withWorkspaceToken(workspace, () => getWorkspaceInfo());
+        add(`notion api: ${status.name}`, true, info.workspaceName || info.botName || 'connected');
+      } catch (error) {
+        add(`notion api: ${status.name}`, false, error.message);
+      }
     }
   }
   const status = mirrorStatus(config, options);
@@ -1018,5 +1032,13 @@ async function main() {
 if (require.main === module) {
   main();
 } else {
-  module.exports = { mirrorConfig };
+  module.exports = {
+    mirrorConfig,
+    _internal: {
+      defaultPagePath,
+      manifestEntryFileExists,
+      withWorkspaceToken,
+      workspaceConfigs,
+    },
+  };
 }
