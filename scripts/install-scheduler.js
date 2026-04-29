@@ -32,15 +32,19 @@ function parseArgs(argv) {
   const args = stripTokenArg(argv);
   const options = {
     configPath: DEFAULT_CONFIG,
-    everyMinutes: DEFAULT_EVERY_MINUTES,
+    everyMinutes: null,
     name: DEFAULT_NAME,
     mode: 'print',
+    everySetByCli: false,
   };
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--help' || args[i] === '-h') usage(0);
     else if (args[i] === '--config' && args[i + 1]) options.configPath = args[++i];
-    else if (args[i] === '--every' && args[i + 1]) options.everyMinutes = parsePositiveInt(args[++i], DEFAULT_EVERY_MINUTES);
+    else if (args[i] === '--every' && args[i + 1]) {
+      options.everyMinutes = parsePositiveInt(args[++i], DEFAULT_EVERY_MINUTES);
+      options.everySetByCli = true;
+    }
     else if (args[i] === '--name' && args[i + 1]) options.name = sanitizeName(args[++i]);
     else if (args[i] === '--mode' && args[i + 1]) options.mode = parseMode(args[++i]);
     else throw new Error(`Unknown argument: ${args[i]}`);
@@ -80,18 +84,29 @@ function xmlEscape(value) {
 function buildContext(options) {
   const workdir = process.cwd();
   const configPath = resolveSafePath(options.configPath, { mode: 'read' });
+  const config = readConfigIfPresent(configPath);
+  const configuredEvery = parsePositiveInt(config?.sync?.intervalMinutes, DEFAULT_EVERY_MINUTES);
   const scriptPath = path.resolve(__dirname, 'mirror-config.js');
   const nodePath = process.execPath;
   const logPath = path.join(workdir, '.notion-sync-to-search.log');
 
   return {
     ...options,
+    everyMinutes: options.everySetByCli ? options.everyMinutes : configuredEvery,
     workdir,
     configPath,
     scriptPath,
     nodePath,
     logPath,
   };
+}
+
+function readConfigIfPresent(configPath) {
+  try {
+    return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch (_) {
+    return {};
+  }
 }
 
 function buildLaunchd(ctx) {

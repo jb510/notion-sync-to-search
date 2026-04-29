@@ -1,5 +1,9 @@
 {
   "outDir": "notion-sync-read-only",
+  "workspaceFolder": "auto",
+  "sync": {
+    "intervalMinutes": 60
+  },
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",

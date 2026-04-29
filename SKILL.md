@@ -25,14 +25,15 @@ This skill exists because Notion is good as a canonical workspace, but local Ope
 The standard mirror folder is:
 
 ```text
-notion-sync-read-only/
+notion-sync-read-only/<Notion workspace name>/
 ```
 
-The folder name is intentional. Humans and agents should treat files inside it as generated cache.
+The folder names are intentional. The root identifies the generated mirror, and the workspace subfolder keeps separate Notion workspaces from blending together. Humans and agents should treat files inside it as generated cache.
 
 ## What This Skill Is For
 
 - Mirroring every page the Notion integration can see, with explicit limits.
+- Organizing mirrored content under a Notion workspace-name subfolder.
 - Scheduling recurring refresh so the local knowledge base does not depend on manual sync.
 - Pulling individual Notion pages into local markdown for debugging or advanced narrowing.
 - Walking nested page blocks so searchable text inside toggles, lists, callouts, child pages, media captions, and tables is included.
@@ -117,6 +118,10 @@ Create `config/notion-search-mirror.json`. The default knowledge-base shape mirr
 ```json
 {
   "outDir": "notion-sync-read-only",
+  "workspaceFolder": "auto",
+  "sync": {
+    "intervalMinutes": 60
+  },
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",
@@ -149,6 +154,19 @@ Add my Postgres runbook page and PRDs database to the Notion mirror config.
 When handling those requests, create or update `config/notion-search-mirror.json` in the user's OpenClaw workspace.
 
 Use workspace mirroring carefully. It mirrors only pages the integration can see. It does not bypass Notion sharing or permissions.
+
+`workspaceFolder` controls the folder under `outDir`:
+
+- `"auto"` is the default. The script calls `GET /v1/users/me` and uses the integration bot's Notion `workspace_name`.
+- A string such as `"Work"` or `"Personal"` overrides the folder name.
+- `"none"` disables the workspace subfolder and uses the old flat output shape. Use that only when the operator explicitly asks for it.
+
+For multiple Notion workspaces, use one token/config per workspace. With `workspaceFolder: "auto"`, different workspace names naturally land in separate folders:
+
+```text
+notion-sync-read-only/Work/
+notion-sync-read-only/Personal/
+```
 
 `syncScope` controls the source scope:
 
@@ -201,10 +219,28 @@ That avoids overwriting unrelated Notion pages with the same title and keeps sea
 Scheduled refresh is the expected steady-state workflow. Use the scheduler helper after creating the config:
 
 ```bash
-node {baseDir}/scripts/install-scheduler.js --config config/notion-search-mirror.json --every 60
+node {baseDir}/scripts/install-scheduler.js --config config/notion-search-mirror.json
 ```
 
-By default it prints launchd/systemd/cron files and activation commands for the host. Use `--mode install` only when the user wants the helper to write scheduler files. The scheduler helper does not store `NOTION_API_KEY`; configure that secret in the scheduler runtime environment.
+By default it reads `sync.intervalMinutes` from the config, then prints launchd/systemd/cron files and activation commands for the host. Use `--mode install` only when the user wants the helper to write scheduler files. The scheduler helper does not store `NOTION_API_KEY`; configure that secret in the scheduler runtime environment.
+
+Users can control sync frequency in config:
+
+```json
+{
+  "sync": {
+    "intervalMinutes": 60
+  }
+}
+```
+
+After changing `sync.intervalMinutes`, regenerate or reinstall the host scheduler. Existing launchd/systemd/cron entries keep the interval they were installed with until replaced.
+
+The CLI can override the config interval for a one-time scheduler generation:
+
+```bash
+node {baseDir}/scripts/install-scheduler.js --config config/notion-search-mirror.json --every 240
+```
 
 ## Refresh Behavior
 
@@ -218,12 +254,13 @@ node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json
 
 That command performs an incremental sync:
 
-1. Discover currently visible pages from workspace search, configured pages, and configured database queries.
-2. Compare each page's Notion `last_edited_time` to `notion-sync-read-only/.notion-search-mirror.json`.
-3. Skip fetching blocks for unchanged pages whose local markdown file still exists.
-4. Fetch blocks and rewrite markdown only for new or changed pages.
-5. Prune generated local markdown for pages that disappeared from the current discovery/config.
-6. Record `lastSeenAt`, `lastCheckedAt`, `mirroredAt`, and recent run summaries in the manifest.
+1. Resolve the workspace output folder from Notion bot metadata when `workspaceFolder` is `"auto"`.
+2. Discover currently visible pages from workspace search, configured pages, and configured database queries.
+3. Compare each page's Notion `last_edited_time` to the workspace folder's `.notion-search-mirror.json`.
+4. Skip fetching blocks for unchanged pages whose local markdown file still exists.
+5. Fetch blocks and rewrite markdown only for new or changed pages.
+6. Prune generated local markdown for pages that disappeared from the current discovery/config.
+7. Record `lastSeenAt`, `lastCheckedAt`, `mirroredAt`, and recent run summaries in the manifest.
 
 Manual full reconciliation ignores the unchanged-page skip and refetches every currently visible page:
 

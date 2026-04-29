@@ -35,6 +35,8 @@ function usage(exitCode = 0) {
   console.log('Config shape:');
   console.log(JSON.stringify({
     outDir: DEFAULT_OUT_DIR,
+    workspaceFolder: 'auto',
+    sync: { intervalMinutes: 60 },
     syncScope: 'integration-visible-workspace',
     workspace: { query: '', pathPrefix: '', limit: 5000 },
     pages: [],
@@ -81,6 +83,12 @@ function sanitizeRelativePathPrefix(value) {
     .map(segment => sanitizePathSegment(segment))
     .filter(Boolean)
     .join(path.sep);
+}
+
+function sanitizeFolderName(value) {
+  return sanitizePathSegment(value)
+    .replace(/^\.+$/, 'Notion Workspace')
+    .slice(0, 80) || 'Notion Workspace';
 }
 
 function parseLimit(value, defaultValue, maxValue) {
@@ -145,6 +153,26 @@ async function searchWorkspacePages(workspaceConfig) {
   return pages;
 }
 
+async function getWorkspaceInfo() {
+  try {
+    const me = await notionRequest('/v1/users/me', 'GET');
+    return {
+      workspaceName: me?.bot?.workspace_name || '',
+      workspaceId: me?.bot?.workspace_id || '',
+      botName: me?.name || '',
+      botId: me?.id || '',
+    };
+  } catch (error) {
+    if (error.statusCode === 401 || error.statusCode === 429) throw error;
+    return {
+      workspaceName: '',
+      workspaceId: '',
+      botName: '',
+      botId: '',
+    };
+  }
+}
+
 function titleFromPageResult(page) {
   return getTitle(page);
 }
@@ -206,6 +234,39 @@ function pushRunHistory(manifest, run) {
   manifest.runs = manifest.runs.slice(0, 20);
 }
 
+async function resolveMirrorOutDir(config) {
+  const baseOutDir = config.outDir || DEFAULT_OUT_DIR;
+  const workspaceFolder = config.workspaceFolder ?? 'auto';
+
+  if (workspaceFolder === false || workspaceFolder === null || workspaceFolder === 'none') {
+    return {
+      outDir: baseOutDir,
+      baseOutDir,
+      workspaceFolder: '',
+      workspaceInfo: null,
+    };
+  }
+
+  if (workspaceFolder && workspaceFolder !== 'auto') {
+    const folder = sanitizeFolderName(workspaceFolder);
+    return {
+      outDir: path.join(baseOutDir, folder),
+      baseOutDir,
+      workspaceFolder: folder,
+      workspaceInfo: null,
+    };
+  }
+
+  const workspaceInfo = await getWorkspaceInfo();
+  const folder = sanitizeFolderName(workspaceInfo.workspaceName || workspaceInfo.botName || 'Notion Workspace');
+  return {
+    outDir: path.join(baseOutDir, folder),
+    baseOutDir,
+    workspaceFolder: folder,
+    workspaceInfo,
+  };
+}
+
 async function processCandidate(candidate, context) {
   const { outDir, manifest, full, now, results, seenPageIds } = context;
   const pageId = normalizeId(candidate.page.id || candidate.pageId);
@@ -234,7 +295,8 @@ async function processCandidate(candidate, context) {
 }
 
 async function mirrorConfig(config, options = {}) {
-  const outDir = config.outDir || DEFAULT_OUT_DIR;
+  const output = await resolveMirrorOutDir(config);
+  const outDir = output.outDir;
   const safeOutDir = resolveSafePath(outDir, { mode: 'write' });
   fs.mkdirSync(safeOutDir, { recursive: true });
 
@@ -243,6 +305,9 @@ async function mirrorConfig(config, options = {}) {
   const run = {
     startedAt: now,
     completedAt: null,
+    workspaceFolder: output.workspaceFolder,
+    workspaceName: output.workspaceInfo?.workspaceName || '',
+    workspaceId: output.workspaceInfo?.workspaceId || '',
     full: Boolean(options.full),
     prune: options.prune !== false,
     seen: 0,
@@ -257,6 +322,9 @@ async function mirrorConfig(config, options = {}) {
     pruned: [],
     manifestPath: path.relative(process.cwd(), path.join(safeOutDir, '.notion-search-mirror.json')),
     outDir: path.relative(process.cwd(), safeOutDir) || '.',
+    baseOutDir: output.baseOutDir,
+    workspaceFolder: output.workspaceFolder,
+    workspaceInfo: output.workspaceInfo,
     full: run.full,
     prune: run.prune,
   };
@@ -333,6 +401,13 @@ async function mirrorConfig(config, options = {}) {
   run.skipped = results.skipped.length;
   run.pruned = results.pruned.length;
   manifest.lastRun = run;
+  manifest.workspace = {
+    folder: output.workspaceFolder,
+    name: output.workspaceInfo?.workspaceName || '',
+    id: output.workspaceInfo?.workspaceId || '',
+    botName: output.workspaceInfo?.botName || '',
+    botId: output.workspaceInfo?.botId || '',
+  };
   pushRunHistory(manifest, run);
   saveManifest(safeOutDir, manifest);
   results.run = run;
