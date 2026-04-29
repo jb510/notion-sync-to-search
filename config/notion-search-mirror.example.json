@@ -4,6 +4,9 @@
   "sync": {
     "intervalMinutes": 60
   },
+  "report": {
+    "retentionRuns": 250
+  },
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",

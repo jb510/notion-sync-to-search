@@ -66,6 +66,7 @@ function getApiKey() {
 function checkApiKey() {
   // Allow usage/help output without requiring credentials.
   if (hasHelpFlag()) return;
+  if (hasReportFlag()) return;
 
   if (!getApiKey()) {
     const message = 'No Notion API token found. Set NOTION_API_KEY in the environment.';
@@ -95,6 +96,10 @@ function hasJsonFlag() {
 
 function hasHelpFlag() {
   return process.argv.includes('--help') || process.argv.includes('-h');
+}
+
+function hasReportFlag() {
+  return process.argv.includes('--report');
 }
 
 function log(msg) {
@@ -588,6 +593,7 @@ module.exports = {
   stripTokenArg,
   hasJsonFlag,
   hasHelpFlag,
+  hasReportFlag,
   log,
   resolveSafePath,
   writeFileAtomic,

@@ -76,6 +76,9 @@ Config shape:
   "sync": {
     "intervalMinutes": 60
   },
+  "report": {
+    "retentionRuns": 250
+  },
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",
@@ -224,7 +227,9 @@ Report recent sync activity without syncing:
 node scripts/mirror-config.js config/notion-search-mirror.json --report --days 7
 ```
 
-Reports include failures and pruned pages recorded in the manifest run history.
+Reports include failures and pruned pages recorded in the manifest run history. They are local-only and discover existing workspace manifests under `outDir`; use `--workspace-folder <name>` to select one workspace folder.
+
+Run history retention defaults to 250 runs. Configure with `report.retentionRuns`.
 
 The OpenClaw memory/search backend is responsible for indexing the changed local markdown. If search looks stale after resync, refresh/reindex/restart the active memory/search backend for that install.
 

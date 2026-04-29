@@ -220,7 +220,7 @@ function buildCron(ctx) {
   }
 
   const intervalSeconds = ctx.everyMinutes * 60;
-  const stampPath = path.join(ctx.workdir, '.notion-sync-to-search.last-run');
+  const stampPath = path.join(ctx.workdir, `.${ctx.name}.last-run`);
   const gatedCommand = [
     `now=$(date +\\%s)`,
     `last=$(cat ${shellQuote(stampPath)} 2>/dev/null || echo 0)`,

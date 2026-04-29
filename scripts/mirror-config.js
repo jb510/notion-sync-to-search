@@ -18,6 +18,7 @@ const {
 const {
   mirrorPage,
   DEFAULT_OUT_DIR,
+  MANIFEST_FILE,
   getPage,
   getTitle,
   assertRelativePath,
@@ -35,6 +36,7 @@ function usage(exitCode = 0) {
   console.log('  --no-prune  Alias for --prune off');
   console.log('  --report    Print a sync report from the existing manifest without syncing');
   console.log('  --days      Report lookback window in days (default: 7)');
+  console.log('  --workspace-folder <name|none>  Select local workspace folder for reports/failure recording');
   console.log('');
   console.log('Config shape:');
   console.log(JSON.stringify({
@@ -53,7 +55,7 @@ function parseArgs(argv) {
   const args = stripTokenArg(argv);
   if (args.length < 1 || args[0] === '--help' || args[0] === '-h') usage(args[0] ? 0 : 1);
 
-  const options = { configPath: args[0], full: false, pruneMode: 'safe', report: false, reportDays: 7 };
+  const options = { configPath: args[0], full: false, pruneMode: 'safe', report: false, reportDays: 7, workspaceFolder: null };
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--full' || args[i] === '--force') {
       options.full = true;
@@ -63,6 +65,8 @@ function parseArgs(argv) {
       options.pruneMode = parsePruneMode(args[++i]);
     } else if (args[i] === '--days' && args[i + 1]) {
       options.reportDays = parseLimit(args[++i], 7, 365);
+    } else if (args[i] === '--workspace-folder' && args[i + 1]) {
+      options.workspaceFolder = args[++i];
     } else if (args[i] === '--no-prune') {
       options.pruneMode = 'off';
     } else {
@@ -110,6 +114,11 @@ function parseLimit(value, defaultValue, maxValue) {
   const parsed = Number.parseInt(value ?? defaultValue, 10);
   if (!Number.isFinite(parsed) || parsed < 1) return defaultValue;
   return Math.min(parsed, maxValue);
+}
+
+function parseRetentionRuns(config) {
+  const configured = config?.report?.retentionRuns ?? config?.sync?.retentionRuns;
+  return parseLimit(configured, 250, 10000);
 }
 
 function shortPageId(pageId) {
@@ -259,10 +268,10 @@ function safePruneFile(outDir, entry) {
   return { deleted: true, path: entry.path };
 }
 
-function pushRunHistory(manifest, run) {
+function pushRunHistory(manifest, run, retentionRuns = 250) {
   manifest.runs = Array.isArray(manifest.runs) ? manifest.runs : [];
   manifest.runs.unshift(run);
-  manifest.runs = manifest.runs.slice(0, 20);
+  manifest.runs = manifest.runs.slice(0, retentionRuns);
 }
 
 function summarizeRuns(manifest, days) {
@@ -326,35 +335,156 @@ function formatSyncReport(report, manifestPath) {
   return lines.join('\n');
 }
 
-async function syncReport(config, options = {}) {
-  const output = await resolveMirrorOutDir(config);
+function configuredOutDir(config) {
+  return config.outDir || DEFAULT_OUT_DIR;
+}
+
+function localOutputForWorkspaceFolder(config, workspaceFolder) {
+  const baseOutDir = configuredOutDir(config);
+  if (workspaceFolder === false || workspaceFolder === null || workspaceFolder === '' || workspaceFolder === 'none') {
+    return {
+      outDir: baseOutDir,
+      baseOutDir,
+      workspaceFolder: '',
+      workspaceInfo: null,
+    };
+  }
+
+  const folder = sanitizeFolderName(workspaceFolder);
+  return {
+    outDir: path.join(baseOutDir, folder),
+    baseOutDir,
+    workspaceFolder: folder,
+    workspaceInfo: null,
+  };
+}
+
+function discoverManifestDirs(config) {
+  const baseOutDir = configuredOutDir(config);
+  const workspaceFolder = config.workspaceFolder ?? 'auto';
+  const candidates = [];
+
+  if (workspaceFolder && workspaceFolder !== 'auto') {
+    candidates.push(localOutputForWorkspaceFolder(config, workspaceFolder));
+  } else if (workspaceFolder === false || workspaceFolder === null || workspaceFolder === 'none') {
+    candidates.push(localOutputForWorkspaceFolder(config, 'none'));
+  }
+
+  const safeBase = resolveSafePath(baseOutDir, { mode: 'write' });
+  if (fs.existsSync(path.join(safeBase, MANIFEST_FILE))) {
+    candidates.push({
+      outDir: baseOutDir,
+      baseOutDir,
+      workspaceFolder: '',
+      workspaceInfo: null,
+    });
+  }
+
+  if (fs.existsSync(safeBase) && fs.statSync(safeBase).isDirectory()) {
+    for (const entry of fs.readdirSync(safeBase, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const candidate = {
+        outDir: path.join(baseOutDir, entry.name),
+        baseOutDir,
+        workspaceFolder: entry.name,
+        workspaceInfo: null,
+      };
+      const safeOutDir = resolveSafePath(candidate.outDir, { mode: 'write' });
+      if (fs.existsSync(path.join(safeOutDir, MANIFEST_FILE))) candidates.push(candidate);
+    }
+  }
+
+  const seen = new Set();
+  return candidates.filter(candidate => {
+    const safeOutDir = resolveSafePath(candidate.outDir, { mode: 'write' });
+    if (seen.has(safeOutDir)) return false;
+    seen.add(safeOutDir);
+    return true;
+  });
+}
+
+function resolveLocalReportOutputs(config, options = {}) {
+  if (options.workspaceFolder) {
+    return [localOutputForWorkspaceFolder(config, options.workspaceFolder)];
+  }
+
+  const discovered = discoverManifestDirs(config);
+  if (discovered.length > 0) return discovered;
+
+  const workspaceFolder = config.workspaceFolder ?? 'auto';
+  if (workspaceFolder && workspaceFolder !== 'auto') {
+    return [localOutputForWorkspaceFolder(config, workspaceFolder)];
+  }
+  if (workspaceFolder === false || workspaceFolder === null || workspaceFolder === 'none') {
+    return [localOutputForWorkspaceFolder(config, 'none')];
+  }
+  return [localOutputForWorkspaceFolder(config, 'Notion Workspace')];
+}
+
+function reportForOutput(output, days) {
   const safeOutDir = resolveSafePath(output.outDir, { mode: 'write' });
   const manifest = loadManifest(safeOutDir);
-  const manifestFile = path.relative(process.cwd(), path.join(safeOutDir, '.notion-search-mirror.json'));
+  const manifestFile = path.relative(process.cwd(), path.join(safeOutDir, MANIFEST_FILE));
   return {
     manifestPath: manifestFile,
     outDir: path.relative(process.cwd(), safeOutDir) || '.',
     workspaceFolder: output.workspaceFolder,
     workspaceInfo: output.workspaceInfo,
-    ...summarizeRuns(manifest, options.reportDays || 7),
+    ...summarizeRuns(manifest, days),
   };
 }
 
+function combineReports(reports, days) {
+  if (reports.length === 1) return reports[0];
+  const runs = reports.flatMap(report => report.runs || []);
+  const prunedPages = reports.flatMap(report => report.prunedPages || []);
+  const errors = reports.flatMap(report => report.errors || []);
+  return {
+    days,
+    manifestPath: reports.map(report => report.manifestPath).join(', '),
+    outDir: reports.map(report => report.outDir).join(', '),
+    workspaceFolder: 'multiple',
+    workspaceInfo: null,
+    runCount: runs.length,
+    failedRuns: runs.filter(run => run.failed).length,
+    refreshed: runs.reduce((sum, run) => sum + (run.refreshed || 0), 0),
+    skipped: runs.reduce((sum, run) => sum + (run.skipped || 0), 0),
+    pruned: runs.reduce((sum, run) => sum + (run.pruned || 0), 0),
+    runs,
+    prunedPages,
+    errors,
+    reports,
+  };
+}
+
+function syncReport(config, options = {}) {
+  const days = options.reportDays || 7;
+  const outputs = resolveLocalReportOutputs(config, options);
+  return combineReports(outputs.map(output => reportForOutput(output, days)), days);
+}
+
+function resolveFailureOutput(config, options = {}) {
+  if (options.workspaceFolder) return localOutputForWorkspaceFolder(config, options.workspaceFolder);
+
+  const discovered = discoverManifestDirs(config);
+  if (discovered.length === 1) return discovered[0];
+
+  const workspaceFolder = config.workspaceFolder ?? 'auto';
+  if (workspaceFolder && workspaceFolder !== 'auto') return localOutputForWorkspaceFolder(config, workspaceFolder);
+  if (workspaceFolder === false || workspaceFolder === null || workspaceFolder === 'none') {
+    return localOutputForWorkspaceFolder(config, 'none');
+  }
+  return null;
+}
+
 async function recordSyncFailure(config, options, error) {
-  let output;
-  try {
-    output = await resolveMirrorOutDir(config);
-  } catch (_) {
-    const baseOutDir = config.outDir || DEFAULT_OUT_DIR;
-    const fallbackFolder = config.workspaceFolder && config.workspaceFolder !== 'auto'
-      ? sanitizeFolderName(config.workspaceFolder)
-      : 'Notion Workspace';
-    output = {
-      outDir: config.workspaceFolder === 'none' ? baseOutDir : path.join(baseOutDir, fallbackFolder),
-      baseOutDir,
-      workspaceFolder: config.workspaceFolder === 'none' ? '' : fallbackFolder,
-      workspaceInfo: null,
-    };
+  let output = resolveFailureOutput(config, options);
+  if (!output) {
+    try {
+      output = await resolveMirrorOutDir(config);
+    } catch (_) {
+      output = localOutputForWorkspaceFolder(config, 'Notion Workspace');
+    }
   }
 
   const safeOutDir = resolveSafePath(output.outDir, { mode: 'write' });
@@ -380,12 +510,12 @@ async function recordSyncFailure(config, options, error) {
     prunedPages: [],
   };
   manifest.lastRun = run;
-  pushRunHistory(manifest, run);
+  pushRunHistory(manifest, run, parseRetentionRuns(config));
   saveManifest(safeOutDir, manifest);
 }
 
 async function resolveMirrorOutDir(config) {
-  const baseOutDir = config.outDir || DEFAULT_OUT_DIR;
+  const baseOutDir = configuredOutDir(config);
   const workspaceFolder = config.workspaceFolder ?? 'auto';
 
   if (workspaceFolder === false || workspaceFolder === null || workspaceFolder === 'none') {
@@ -454,6 +584,7 @@ async function mirrorConfig(config, options = {}) {
   fs.mkdirSync(safeOutDir, { recursive: true });
 
   const manifest = loadManifest(safeOutDir);
+  const retentionRuns = parseRetentionRuns(config);
   const now = new Date().toISOString();
   const run = {
     startedAt: now,
@@ -587,7 +718,7 @@ async function mirrorConfig(config, options = {}) {
     botName: output.workspaceInfo?.botName || '',
     botId: output.workspaceInfo?.botId || '',
   };
-  pushRunHistory(manifest, run);
+  pushRunHistory(manifest, run, retentionRuns);
   saveManifest(safeOutDir, manifest);
   results.run = run;
 

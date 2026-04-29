@@ -123,6 +123,9 @@ Create `config/notion-search-mirror.json`. The default knowledge-base shape mirr
   "sync": {
     "intervalMinutes": 60
   },
+  "report": {
+    "retentionRuns": 250
+  },
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",
@@ -294,6 +297,22 @@ Sync reports do not call Notion search or fetch page content. They read the loca
 
 ```bash
 node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json --report --days 7
+```
+
+Reports discover existing workspace manifest folders under `outDir`. To select one folder explicitly:
+
+```bash
+node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json --report --workspace-folder "Work" --days 7
+```
+
+Run history retention defaults to 250 runs:
+
+```json
+{
+  "report": {
+    "retentionRuns": 500
+  }
+}
 ```
 
 OpenClaw memory/search will see mirror changes according to the active backend's normal indexing behavior. If search results still look stale, refresh/reindex/restart that memory backend as appropriate for the install.

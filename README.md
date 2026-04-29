@@ -33,6 +33,9 @@ The example config mirrors the integration-visible workspace by default:
   "sync": {
     "intervalMinutes": 60
   },
+  "report": {
+    "retentionRuns": 250
+  },
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",
@@ -209,6 +212,22 @@ Reports use the manifest run history and include failures and pruned pages:
 ```bash
 node scripts/mirror-config.js config/notion-search-mirror.json --report --days 1
 node scripts/mirror-config.js config/notion-search-mirror.json --report --days 7
+```
+
+Reports are local-only. They discover existing `.notion-search-mirror.json` files under `outDir` and do not call the Notion API. To select one workspace folder explicitly:
+
+```bash
+node scripts/mirror-config.js config/notion-search-mirror.json --report --workspace-folder "Work" --days 7
+```
+
+Run history retention defaults to 250 runs and can be configured:
+
+```json
+{
+  "report": {
+    "retentionRuns": 500
+  }
+}
 ```
 
 To generate scheduler files for a daily or weekly report:

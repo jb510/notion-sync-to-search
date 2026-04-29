@@ -170,6 +170,26 @@ function writeRegularFile(filePath, body) {
   writeFileAtomic(filePath, body);
 }
 
+function removeOldGeneratedFile(outDir, previousEntry, nextOutputPath) {
+  if (!previousEntry?.path) return null;
+
+  const oldPath = resolveSafePath(previousEntry.path, { mode: 'write' });
+  if (oldPath === nextOutputPath) return null;
+  if (!isInside(outDir, oldPath)) {
+    throw new Error(`Refusing to remove previous mirror file outside mirror folder: ${previousEntry.path}`);
+  }
+  if (!fs.existsSync(oldPath)) return null;
+
+  const stat = fs.lstatSync(oldPath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Refusing to remove symlinked previous mirror file: ${previousEntry.path}`);
+  }
+  if (!stat.isFile()) return null;
+
+  fs.unlinkSync(oldPath);
+  return path.relative(process.cwd(), oldPath);
+}
+
 async function mirrorPage(options) {
   const pageId = normalizeId(options.pageId);
   const outDir = resolveSafePath(options.outDir, { mode: 'write' });
@@ -194,6 +214,7 @@ async function mirrorPage(options) {
   const body = `${frontmatter(page, pageId, mirroredAt)}# ${title}\n\n${markdown.trim()}\n`;
 
   writeRegularFile(outputPath, body);
+  const removedPreviousPath = removeOldGeneratedFile(outDir, options.previousEntry, outputPath);
 
   const entry = {
     ...(options.previousEntry || {}),
@@ -208,6 +229,10 @@ async function mirrorPage(options) {
     relativePath,
     path: path.relative(process.cwd(), outputPath),
   };
+  if (removedPreviousPath) {
+    entry.previousPath = removedPreviousPath;
+    entry.previousPathRemovedAt = mirroredAt;
+  }
 
   const manifest = options.manifest || loadManifest(outDir);
   updateManifest(manifest, entry);
