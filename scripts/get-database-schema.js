@@ -5,7 +5,7 @@
  * Usage: get-database-schema.js <database-id>
  */
 
-const { checkApiKey, notionRequest, stripTokenArg, hasJsonFlag } = require('./notion-utils.js');
+const { checkApiKey, notionRequest, normalizeId, stripTokenArg, hasJsonFlag } = require('./notion-utils.js');
 
 checkApiKey();
 
@@ -19,7 +19,7 @@ async function main() {
   }
 
   try {
-    const db = await notionRequest(`/v1/databases/${dbId}`, 'GET');
+    const db = await notionRequest(`/v1/databases/${encodeURIComponent(normalizeId(dbId))}`, 'GET');
     console.log(JSON.stringify(db, null, 2));
   } catch (error) {
     if (hasJsonFlag()) {

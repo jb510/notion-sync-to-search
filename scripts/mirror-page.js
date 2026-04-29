@@ -104,6 +104,12 @@ function assertRelativePath(relativePath) {
   if (path.isAbsolute(normalized) || normalized.startsWith('..') || normalized.includes(`${path.sep}..${path.sep}`)) {
     throw new Error(`--path must stay inside the mirror folder: ${relativePath}`);
   }
+  if (/[\x00-\x1f]/.test(relativePath)) {
+    throw new Error(`--path must not contain control characters: ${relativePath}`);
+  }
+  if (path.basename(normalized) === MANIFEST_FILE) {
+    throw new Error(`--path must not target reserved mirror metadata file: ${MANIFEST_FILE}`);
+  }
 }
 
 function isInside(baseDir, candidatePath) {
@@ -116,6 +122,9 @@ function updateManifest(outDir, entry) {
   let manifest = { generatedBy: 'notion-sync-to-search', pages: {} };
 
   if (fs.existsSync(manifestPath)) {
+    if (fs.lstatSync(manifestPath).isSymbolicLink()) {
+      throw new Error(`Refusing to read or write symlinked manifest: ${manifestPath}`);
+    }
     try {
       manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     } catch (_) {
@@ -128,7 +137,14 @@ function updateManifest(outDir, entry) {
   manifest.pages = manifest.pages || {};
   manifest.pages[entry.pageId] = entry;
 
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  writeRegularFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+}
+
+function writeRegularFile(filePath, body) {
+  if (fs.existsSync(filePath) && fs.lstatSync(filePath).isSymbolicLink()) {
+    throw new Error(`Refusing to write through symlink: ${filePath}`);
+  }
+  fs.writeFileSync(filePath, body, 'utf8');
 }
 
 async function mirrorPage(options) {
@@ -154,7 +170,7 @@ async function mirrorPage(options) {
   const mirroredAt = new Date().toISOString();
   const body = `${frontmatter(page, pageId, mirroredAt)}# ${title}\n\n${markdown.trim()}\n`;
 
-  fs.writeFileSync(outputPath, body, 'utf8');
+  writeRegularFile(outputPath, body);
 
   const entry = {
     pageId,

@@ -30,7 +30,7 @@ async function main() {
   const args = stripTokenArg(process.argv.slice(2));
 
   if (args.length < 1 || args[0] === '--help') {
-    console.log('Usage: notion-to-md.js <page-id> [output-file] [--json] [--allow-unsafe-paths]');
+    console.log('Usage: notion-to-md.js <page-id> [output-file] [--json]');
     console.log('');
     console.log('Example:');
     console.log('  notion-to-md.js "abc123..." newsletter.md --json');
@@ -60,6 +60,9 @@ async function main() {
 
     if (safeOutputFile) {
       const fs = require('fs');
+      if (fs.existsSync(safeOutputFile) && fs.lstatSync(safeOutputFile).isSymbolicLink()) {
+        throw new Error(`Refusing to write through symlink: ${safeOutputFile}`);
+      }
       fs.writeFileSync(safeOutputFile, `# ${title}\n\n${markdown}`, 'utf8');
       if (!hasJsonFlag()) {
         log(`✓ Saved to ${safeOutputFile}`);

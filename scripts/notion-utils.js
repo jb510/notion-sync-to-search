@@ -9,63 +9,16 @@ const os = require('os');
 const path = require('path');
 
 const NOTION_VERSION = process.env.NOTION_VERSION || '2026-03-11';
+const REQUEST_TIMEOUT_MS = 30000;
 
 // Cached token (resolved once per process)
 let _cachedToken = undefined;
 
 /**
- * Resolve the Notion API token from multiple sources (in priority order):
- *
- * 1. --token-file <path>    Read from a file (recommended for automation)
- * 2. --token-stdin           Read from stdin (recommended for pipes)
- * 3. ~/.notion-token         Auto-detected default token file
- * 4. NOTION_API_KEY env var  Environment variable fallback
- *
- * Credentials are never accepted as bare command-line arguments to avoid
- * exposure in process listings and shell history.
+ * Resolve the Notion API token from NOTION_API_KEY only.
  */
 function resolveToken() {
   if (_cachedToken !== undefined) return _cachedToken;
-
-  const args = process.argv;
-
-  for (let i = 2; i < args.length; i++) {
-    // --token-file <path>
-    if (args[i] === '--token-file' && args[i + 1]) {
-      try {
-        const tokenPath = expandHomePath(args[i + 1]);
-        _cachedToken = fs.readFileSync(tokenPath, 'utf8').trim();
-        return _cachedToken;
-      } catch (err) {
-        console.error(`Error reading token file "${args[i + 1]}": ${err.message}`);
-        process.exit(1);
-      }
-    }
-    // --token-stdin
-    if (args[i] === '--token-stdin') {
-      try {
-        _cachedToken = fs.readFileSync(0, 'utf8').trim(); // fd 0 = stdin
-        return _cachedToken;
-      } catch (err) {
-        console.error(`Error reading token from stdin: ${err.message}`);
-        process.exit(1);
-      }
-    }
-  }
-
-  // Auto-check default token file
-  const defaultTokenPath = path.join(os.homedir(), '.notion-token');
-  if (fs.existsSync(defaultTokenPath)) {
-    try {
-      _cachedToken = fs.readFileSync(defaultTokenPath, 'utf8').trim();
-      return _cachedToken;
-    } catch (err) {
-      console.error(`Error reading default token file "${defaultTokenPath}": ${err.message}`);
-      process.exit(1);
-    }
-  }
-
-  // Env var fallback
   if (process.env.NOTION_API_KEY) {
     _cachedToken = process.env.NOTION_API_KEY;
     return _cachedToken;
@@ -111,7 +64,7 @@ function checkApiKey() {
   if (hasHelpFlag()) return;
 
   if (!getApiKey()) {
-    const message = 'No Notion API token found. Provide one via: --token-file <path>, --token-stdin (pipe), or NOTION_API_KEY env var.';
+    const message = 'No Notion API token found. Set NOTION_API_KEY in the environment.';
     if (hasJsonFlag()) {
       console.log(JSON.stringify({ error: message }, null, 2));
     } else {
@@ -119,14 +72,10 @@ function checkApiKey() {
       console.error('');
       console.error(message);
       console.error('');
-      console.error('Usage (pick one):');
-      console.error('  node scripts/<script>.js --token-file ~/.notion-token [args]');
-      console.error('  echo "$NOTION_API_KEY" | node scripts/<script>.js --token-stdin [args]');
+      console.error('Usage:');
       console.error('  NOTION_API_KEY=ntn_... node scripts/<script>.js [args]');
       console.error('');
-      console.error('Default: if ~/.notion-token exists, it is used automatically.');
-      console.error('');
-      console.error('Credentials are never passed as bare CLI arguments (security best practice).');
+      console.error('Credentials are read from the environment only and are never accepted as positional arguments.');
       console.error('Create an integration at https://www.notion.so/my-integrations');
     }
     process.exit(1);
@@ -142,10 +91,6 @@ function hasJsonFlag() {
 
 function hasHelpFlag() {
   return process.argv.includes('--help') || process.argv.includes('-h');
-}
-
-function hasUnsafePathFlag() {
-  return process.argv.includes('--allow-unsafe-paths');
 }
 
 function log(msg) {
@@ -186,16 +131,11 @@ function resolveSafePath(inputPath, options = {}) {
     }
   }
 
-  if (hasUnsafePathFlag()) {
-    return candidatePath;
-  }
-
   const workspaceRoot = fs.realpathSync(process.cwd());
   if (!isPathInside(workspaceRoot, candidatePath)) {
     const action = mode === 'write' ? 'write to' : 'read from';
     throw new Error(
-      `Refusing to ${action} path outside current workspace: ${inputPath}. ` +
-      'Use --allow-unsafe-paths to override intentionally.'
+      `Refusing to ${action} path outside current workspace: ${inputPath}.`
     );
   }
 
@@ -205,13 +145,7 @@ function resolveSafePath(inputPath, options = {}) {
 function stripTokenArg(args) {
   const result = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--token-file' && i + 1 < args.length) {
-      i++; // skip value
-    } else if (args[i] === '--token-stdin') {
-      // skip flag only (no value)
-    } else if (args[i] === '--json') {
-      // skip flag only (no value)
-    } else if (args[i] === '--allow-unsafe-paths') {
+    if (args[i] === '--json') {
       // skip flag only (no value)
     } else {
       result.push(args[i]);
@@ -226,7 +160,7 @@ function stripTokenArg(args) {
 function notionRequest(path, method, data = null) {
   const apiKey = getApiKey();
   if (!apiKey) {
-    return Promise.reject(new Error('No Notion API token found. Provide one via: --token-file <path>, --token-stdin (pipe), or NOTION_API_KEY env var.'));
+    return Promise.reject(new Error('No Notion API token found. Set NOTION_API_KEY in the environment.'));
   }
 
   return new Promise((resolve, reject) => {
@@ -266,6 +200,9 @@ function notionRequest(path, method, data = null) {
 
     req.on('error', (err) => {
       reject(wrapNetworkError(err));
+    });
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error('Notion API request timed out.'));
     });
     if (requestData) {
       req.write(requestData);
@@ -384,236 +321,6 @@ function extractPropertyValue(property) {
   }
 }
 
-/**
- * Format property value for Notion API write operations
- */
-function formatPropertyValue(propertyType, value) {
-  switch (propertyType) {
-    case 'select':
-      return { select: { name: value } };
-
-    case 'multi_select': {
-      const tags = Array.isArray(value) ? value : value.split(',').map(t => t.trim());
-      return { multi_select: tags.map(name => ({ name })) };
-    }
-
-    case 'checkbox': {
-      const boolValue = typeof value === 'boolean' ? value :
-        (String(value).toLowerCase() === 'true' || value === '1');
-      return { checkbox: boolValue };
-    }
-
-    case 'number':
-      return { number: typeof value === 'number' ? value : parseFloat(value) };
-
-    case 'url':
-      return { url: value };
-
-    case 'email':
-      return { email: value };
-
-    case 'date': {
-      if (typeof value === 'string') {
-        const dates = value.split(',').map(d => d.trim());
-        return { date: { start: dates[0], end: dates[1] || null } };
-      }
-      return { date: value };
-    }
-
-    case 'rich_text':
-      return { rich_text: [{ type: 'text', text: { content: value } }] };
-
-    case 'title':
-      return { title: [{ type: 'text', text: { content: value } }] };
-
-    default:
-      throw new Error(`Unsupported property type: ${propertyType}. Supported: select, multi_select, checkbox, number, url, email, date, rich_text, title`);
-  }
-}
-
-// --- Rich Text Utilities ---
-
-/**
- * Parse plain text into Notion rich_text array, handling the 2000-char limit
- */
-function parseRichText(text) {
-  const maxLength = 2000;
-  const richText = [];
-
-  for (let i = 0; i < text.length; i += maxLength) {
-    richText.push({
-      type: 'text',
-      text: { content: text.substring(i, i + maxLength) }
-    });
-  }
-
-  return richText.length > 0 ? richText : [{ type: 'text', text: { content: '' } }];
-}
-
-/**
- * Parse markdown-formatted text into Notion rich_text with annotations
- */
-function pushRichTextChunked(richText, item, maxLength = 2000) {
-  const content = item?.text?.content || '';
-
-  if (content.length === 0) {
-    richText.push(item);
-    return;
-  }
-
-  for (let i = 0; i < content.length; i += maxLength) {
-    richText.push({
-      ...item,
-      text: {
-        ...item.text,
-        content: content.substring(i, i + maxLength)
-      }
-    });
-  }
-}
-
-function parseMarkdownRichText(text) {
-  const richText = [];
-  const parts = text.split(/(\*\*.*?\*\*|\*.*?\*|\[.*?\]\(.*?\))/);
-
-  for (const part of parts) {
-    if (!part) continue;
-
-    if (part.startsWith('**') && part.endsWith('**')) {
-      pushRichTextChunked(richText, {
-        type: 'text',
-        text: { content: part.slice(2, -2) },
-        annotations: { bold: true }
-      });
-    } else if (part.startsWith('*') && part.endsWith('*') && !part.startsWith('**')) {
-      pushRichTextChunked(richText, {
-        type: 'text',
-        text: { content: part.slice(1, -1) },
-        annotations: { italic: true }
-      });
-    } else {
-      const linkMatch = part.match(/\[(.*?)\]\((.*?)\)/);
-      if (linkMatch) {
-        pushRichTextChunked(richText, {
-          type: 'text',
-          text: { content: linkMatch[1], link: { url: linkMatch[2] } }
-        });
-      } else {
-        pushRichTextChunked(richText, {
-          type: 'text',
-          text: { content: part }
-        });
-      }
-    }
-  }
-
-  return richText.length > 0 ? richText : [{ type: 'text', text: { content: text } }];
-}
-
-// --- Markdown Parsing ---
-
-/**
- * Parse markdown string into Notion block array
- * @param {string} markdown - Markdown content
- * @param {object} options - { richText: 'plain' | 'markdown' }
- */
-function parseMarkdownToBlocks(markdown, options = {}) {
-  const useMarkdownRichText = options.richText === 'markdown';
-  const toRichText = useMarkdownRichText ? parseMarkdownRichText : parseRichText;
-
-  const lines = markdown.split('\n');
-  const blocks = [];
-  let currentParagraph = [];
-  let inCodeBlock = false;
-  let codeLanguage = '';
-  let codeContent = [];
-
-  const flushParagraph = () => {
-    if (currentParagraph.length > 0) {
-      const text = currentParagraph.join('\n').trim();
-      if (text) {
-        blocks.push({
-          type: 'paragraph',
-          paragraph: { rich_text: toRichText(text) }
-        });
-      }
-      currentParagraph = [];
-    }
-  };
-
-  for (const line of lines) {
-    // Code blocks
-    if (line.startsWith('```')) {
-      if (!inCodeBlock) {
-        flushParagraph();
-        inCodeBlock = true;
-        codeLanguage = line.slice(3).trim() || 'plain text';
-        codeContent = [];
-      } else {
-        const codeText = codeContent.join('\n');
-        blocks.push({
-          type: 'code',
-          code: {
-            language: codeLanguage,
-            rich_text: codeText
-              ? parseRichText(codeText)
-              : [{ type: 'text', text: { content: '' } }]
-          }
-        });
-        inCodeBlock = false;
-        codeLanguage = '';
-        codeContent = [];
-      }
-      continue;
-    }
-
-    if (inCodeBlock) {
-      codeContent.push(line);
-      continue;
-    }
-
-    // Headings (check ### before ## before #)
-    const headingMatch = line.match(/^(#{1,3})\s+(.*)/);
-    if (headingMatch) {
-      flushParagraph();
-      const level = headingMatch[1].length;
-      const text = headingMatch[2].trim();
-      const type = `heading_${level}`;
-      blocks.push({ type, [type]: { rich_text: toRichText(text) } });
-      continue;
-    }
-
-    // Horizontal rules
-    if (/^---+$/.test(line)) {
-      flushParagraph();
-      blocks.push({ type: 'divider', divider: {} });
-      continue;
-    }
-
-    // Bullet lists
-    if (/^[-*]\s+/.test(line)) {
-      flushParagraph();
-      const text = line.replace(/^[-*]\s+/, '').trim();
-      blocks.push({
-        type: 'bulleted_list_item',
-        bulleted_list_item: { rich_text: toRichText(text) }
-      });
-      continue;
-    }
-
-    // Empty lines
-    if (line.trim() === '') {
-      flushParagraph();
-      continue;
-    }
-
-    currentParagraph.push(line);
-  }
-
-  flushParagraph();
-  return blocks;
-}
-
 // --- Block to Markdown ---
 
 /**
@@ -701,8 +408,8 @@ function blocksToMarkdown(blocks) {
         lines.push(`> ${richTextToMarkdown(content.rich_text)}`, '');
         break;
       case 'callout': {
-        const emoji = content.icon?.emoji || '📌';
-        lines.push(`${emoji} ${richTextToMarkdown(content.rich_text)}`, '');
+        const marker = content.icon?.emoji || '[Callout]';
+        lines.push(`${marker} ${richTextToMarkdown(content.rich_text)}`, '');
         break;
       }
       case 'child_page':
@@ -721,7 +428,7 @@ function blocksToMarkdown(blocks) {
       case 'pdf':
       case 'video': {
         const caption = richTextToMarkdown(content.caption || []);
-        const url = content.external?.url || content.file?.url || '';
+        const url = content.external?.url || '';
         if (caption || url) lines.push([caption, url].filter(Boolean).join(' '), '');
         break;
       }
@@ -767,20 +474,6 @@ async function getAllBlocks(blockId) {
   return allBlocks;
 }
 
-/**
- * Append blocks to a page in batches with rate limiting
- */
-async function appendBlocksBatched(pageId, blocks, batchSize = 100, delayMs = 350) {
-  for (let i = 0; i < blocks.length; i += batchSize) {
-    const batch = blocks.slice(i, i + batchSize);
-    await notionRequest(`/v1/blocks/${pageId}/children`, 'PATCH', { children: batch });
-
-    if (i + batchSize < blocks.length) {
-      await new Promise(resolve => setTimeout(resolve, delayMs));
-    }
-  }
-}
-
 module.exports = {
   // Config
   NOTION_VERSION,
@@ -790,7 +483,6 @@ module.exports = {
   stripTokenArg,
   hasJsonFlag,
   hasHelpFlag,
-  hasUnsafePathFlag,
   log,
   resolveSafePath,
   expandHomePath,
@@ -806,21 +498,16 @@ module.exports = {
   // Properties
   extractTitle,
   extractPropertyValue,
-  formatPropertyValue,
 
   // Rich text
-  parseRichText,
-  parseMarkdownRichText,
   richTextToPlain,
   richTextToMarkdown,
 
   // Markdown conversion
-  parseMarkdownToBlocks,
   blocksToMarkdown,
 
   // Page helpers
   getAllBlocks,
-  appendBlocksBatched,
 
   // Testing
   _resetTokenCache: () => { _cachedToken = undefined; },

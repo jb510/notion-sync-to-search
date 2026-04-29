@@ -4,16 +4,17 @@ Technical reference for the scripts in `notion-sync-to-search`.
 
 ## Token Resolution
 
-All scripts require a Notion integration token. Supported sources, in priority order:
+All scripts require a Notion integration token in the environment:
 
-1. `--token-file <path>`
-2. `--token-stdin`
-3. `~/.notion-token`
-4. `NOTION_API_KEY`
+```bash
+export NOTION_API_KEY="ntn_..."
+```
 
-Credentials are never accepted as bare positional CLI arguments.
+Credentials are never accepted as positional arguments, file paths, or stdin.
 
 The scripts use Notion API version `2026-03-11` by default. Override with `NOTION_VERSION` only if an install needs to pin an older API version temporarily.
+Requests time out after 30 seconds.
+Network access is limited to `https://api.notion.com`.
 
 ## JSON Output
 
@@ -147,11 +148,11 @@ Lower-level page export. Prefer `mirror-page.js` for search mirrors because it a
 node scripts/notion-to-md.js <page-id> [output-file] [--json]
 ```
 
-The shared exporter walks nested child blocks and converts common searchable block types, including headings, paragraphs, lists, todos, toggles, code, quotes, callouts, child page/database titles, links, media captions/URLs, and table rows.
+The shared exporter walks nested child blocks and converts common searchable block types, including headings, paragraphs, lists, todos, toggles, code, quotes, callouts, child page/database titles, links, external media URLs, media captions, and table rows. It does not mirror Notion-hosted signed file URLs.
 
 ## Path Safety
 
-Scripts that write files refuse to write outside the current working directory by default. Use `--allow-unsafe-paths` only when you intentionally need to override that guardrail.
+Scripts that write files refuse to write outside the current working directory and refuse to write through symlinks.
 
 ## Non-goals
 
