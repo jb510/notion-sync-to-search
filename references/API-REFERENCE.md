@@ -172,6 +172,27 @@ This is permission-scoped and bounded by `workspace.limit`.
 
 Generated database/workspace paths include a short page ID suffix, such as `Workspace/Topic - short-page-id.md`, so duplicate titles do not overwrite unrelated pages. Explicit `pages[].path` values are respected exactly.
 
+### Resync
+
+Resync is explicit and pull-based. The scripts do not watch Notion or run a background daemon.
+
+Run this whenever the local mirror should catch up with Notion:
+
+```bash
+node scripts/mirror-config.js config/notion-search-mirror.json
+```
+
+Effects:
+
+- Re-fetches configured pages/databases, or the integration-visible workspace when `syncScope` is `integration-visible-workspace`.
+- Writes refreshed markdown files under `outDir`.
+- Updates `outDir/.notion-search-mirror.json`.
+- Leaves `config/notion-search-mirror.json` unchanged.
+
+The OpenClaw memory/search backend is responsible for indexing the changed local markdown. If search looks stale after resync, refresh/reindex/restart the active memory/search backend for that install.
+
+For automatic upkeep, schedule the same command with cron, systemd timer, launchd, or another host scheduler.
+
 ## Live Notion Read Helpers
 
 ### `search-notion.js`

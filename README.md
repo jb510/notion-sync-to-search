@@ -34,6 +34,18 @@ cp config/notion-search-mirror.example.json config/notion-search-mirror.json
 node scripts/mirror-config.js config/notion-search-mirror.json
 ```
 
+OpenClaw can help create or update this config from a natural-language request, for example:
+
+```text
+Configure notion-sync-to-search to mirror my integration-visible Notion workspace.
+```
+
+or:
+
+```text
+Add my Postgres runbook page and PRDs database to the Notion mirror config.
+```
+
 To mirror every page the integration can see, set `syncScope` to `integration-visible-workspace`:
 
 ```json
@@ -88,6 +100,20 @@ node scripts/search-notion.js "prd" --filter database
 This is bounded and permission-scoped. It mirrors what Notion search returns for the integration, not necessarily every private page in the human user's Notion account.
 
 Bulk workspace/database mirrors use filenames like `Topic - short-page-id.md` so duplicate Notion titles do not overwrite each other.
+
+## Resync Behavior
+
+This skill is pull-based. It does not watch Notion, receive Notion webhooks, or update the local mirror automatically when you edit Notion.
+
+To pull down changes after editing Notion, rerun:
+
+```bash
+node scripts/mirror-config.js config/notion-search-mirror.json
+```
+
+That command refreshes the markdown files under `notion-sync-read-only/` and updates `.notion-search-mirror.json`. OpenClaw's memory/search backend then sees the changed local markdown according to that backend's normal indexing behavior. Some installs may pick up file changes quickly; others may need the user to restart/reindex/refresh memory search.
+
+For regular upkeep, schedule the same command with cron, systemd timer, launchd, or whatever scheduler fits the host. A common pattern is hourly or daily sync, depending on how often Notion changes.
 
 ## OpenClaw Memory/Search
 

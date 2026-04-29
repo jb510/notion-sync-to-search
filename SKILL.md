@@ -142,6 +142,20 @@ Then run:
 node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json
 ```
 
+Users do not have to hand-edit this file if they ask OpenClaw to configure the skill. For example:
+
+```text
+Configure notion-sync-to-search to mirror my integration-visible Notion workspace.
+```
+
+or:
+
+```text
+Add my Postgres runbook page and PRDs database to the Notion mirror config.
+```
+
+When handling those requests, create or update `config/notion-search-mirror.json` in the user's OpenClaw workspace.
+
 Use database/workspace mirroring carefully. It mirrors only pages the integration can see. It does not bypass Notion sharing or permissions.
 
 `syncScope` controls the source scope:
@@ -207,6 +221,20 @@ This skill can mirror every page returned by Notion search for the configured in
 ```
 
 The default `syncScope` is `selected`. Whole workspace mirroring is not the default because "whole workspace" means "everything this Notion integration can see and the Notion search API returns," not necessarily every private page in the human user's Notion account. Notion's search endpoint is also not designed as a guaranteed exhaustive export API. It can pull stale, irrelevant, or duplicate pages into local search, and it can miss pages while indexes catch up. Prefer explicit pages/databases for curated knowledge bases; use `integration-visible-workspace` when the integration is intentionally scoped to the knowledge base you want indexed.
+
+## Resync Behavior
+
+This skill is pull-based. It does not watch Notion, receive Notion webhooks, or update the local mirror automatically after Notion changes.
+
+To refresh the mirror, rerun:
+
+```bash
+node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json
+```
+
+That command overwrites/updates generated markdown under `notion-sync-read-only/` and updates `.notion-search-mirror.json`. OpenClaw memory/search will see those changes according to the active backend's normal indexing behavior. If search results still look stale, refresh/reindex/restart that memory backend as appropriate for the install.
+
+For ongoing sync, schedule the same command with the host scheduler, such as cron, systemd timer, or launchd. Choose an interval based on how fresh local search needs to be.
 
 ## Search Workflow
 
