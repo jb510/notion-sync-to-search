@@ -261,6 +261,7 @@ Manual refresh is for debugging or immediate catch-up:
 
 ```bash
 node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json
+node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json --dry-run
 ```
 
 That command performs an incremental sync:
@@ -297,6 +298,8 @@ Sync reports do not call Notion search or fetch page content. They read the loca
 
 ```bash
 node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json --report --days 7
+node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json --status
+node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json --doctor
 ```
 
 Reports discover existing workspace manifest folders under `outDir`. To select one folder explicitly:
@@ -310,10 +313,36 @@ Run history retention defaults to 250 runs:
 ```json
 {
   "report": {
-    "retentionRuns": 500
+    "retentionRuns": 500,
+    "outputFile": "reports/notion-sync-report.md"
   }
 }
 ```
+
+Use `limits` to prevent runaway syncs:
+
+```json
+{
+  "limits": {
+    "maxPages": 5000,
+    "maxBlocksPerPage": 20000,
+    "maxMarkdownBytesPerPage": 5242880,
+    "maxRunMinutes": 60
+  }
+}
+```
+
+Use `searchIndex.freshnessFile` when the local search backend can touch a marker file after indexing:
+
+```json
+{
+  "searchIndex": {
+    "freshnessFile": ".qmd-index-updated"
+  }
+}
+```
+
+For multiple Notion workspaces in one config, use `workspaces[]` with optional `tokenEnv` fields.
 
 OpenClaw memory/search will see mirror changes according to the active backend's normal indexing behavior. If search results still look stale, refresh/reindex/restart that memory backend as appropriate for the install.
 

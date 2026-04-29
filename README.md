@@ -85,6 +85,7 @@ Manual sync is still useful for immediate refresh or debugging:
 
 ```bash
 node scripts/mirror-config.js config/notion-search-mirror.json
+node scripts/mirror-config.js config/notion-search-mirror.json --dry-run
 ```
 
 Manual full reconciliation refetches every currently visible page, rewrites its markdown, and prunes stale manifest entries:
@@ -212,6 +213,8 @@ Reports use the manifest run history and include failures and pruned pages:
 ```bash
 node scripts/mirror-config.js config/notion-search-mirror.json --report --days 1
 node scripts/mirror-config.js config/notion-search-mirror.json --report --days 7
+node scripts/mirror-config.js config/notion-search-mirror.json --status
+node scripts/mirror-config.js config/notion-search-mirror.json --doctor
 ```
 
 Reports are local-only. They discover existing `.notion-search-mirror.json` files under `outDir` and do not call the Notion API. To select one workspace folder explicitly:
@@ -225,8 +228,44 @@ Run history retention defaults to 250 runs and can be configured:
 ```json
 {
   "report": {
-    "retentionRuns": 500
+    "retentionRuns": 500,
+    "outputFile": "reports/notion-sync-report.md"
   }
+}
+```
+
+Optional safety limits:
+
+```json
+{
+  "limits": {
+    "maxPages": 5000,
+    "maxBlocksPerPage": 20000,
+    "maxMarkdownBytesPerPage": 5242880,
+    "maxRunMinutes": 60
+  }
+}
+```
+
+Optional search index freshness checks compare an index marker file mtime to the last completed mirror run:
+
+```json
+{
+  "searchIndex": {
+    "freshnessFile": ".qmd-index-updated"
+  }
+}
+```
+
+Multiple workspaces can be configured in one file. Each entry may name a different token env var:
+
+```json
+{
+  "outDir": "notion-sync-read-only",
+  "workspaces": [
+    { "name": "Work", "workspaceFolder": "Work", "tokenEnv": "NOTION_API_KEY_WORK" },
+    { "name": "Personal", "workspaceFolder": "Personal", "tokenEnv": "NOTION_API_KEY_PERSONAL" }
+  ]
 }
 ```
 

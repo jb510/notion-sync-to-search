@@ -5,6 +5,7 @@
  */
 
 const fs = require('fs');
+const https = require('https');
 const path = require('path');
 const {
   checkApiKey,
@@ -28,13 +29,16 @@ const {
 } = require('./mirror-page.js');
 
 function usage(exitCode = 0) {
-  console.log('Usage: mirror-config.js <config.json> [--full] [--prune safe|force|off] [--report] [--json]');
+  console.log('Usage: mirror-config.js <config.json> [--full] [--dry-run] [--status] [--doctor] [--prune safe|force|off] [--report] [--json]');
   console.log('');
   console.log('Options:');
   console.log('  --full      Refetch and rewrite every discovered page, even if last_edited_time is unchanged');
   console.log('  --prune     safe (default), force, or off');
   console.log('  --no-prune  Alias for --prune off');
   console.log('  --report    Print a sync report from the existing manifest without syncing');
+  console.log('  --status    Print local mirror status without syncing');
+  console.log('  --doctor    Validate config, local mirror, and Notion API access');
+  console.log('  --dry-run   Discover changes and pruning candidates without writing/deleting');
   console.log('  --days      Report lookback window in days (default: 7)');
   console.log('  --workspace-folder <name|none>  Select local workspace folder for reports/failure recording');
   console.log('');
@@ -55,10 +59,16 @@ function parseArgs(argv) {
   const args = stripTokenArg(argv);
   if (args.length < 1 || args[0] === '--help' || args[0] === '-h') usage(args[0] ? 0 : 1);
 
-  const options = { configPath: args[0], full: false, pruneMode: 'safe', report: false, reportDays: 7, workspaceFolder: null };
+  const options = { configPath: args[0], full: false, dryRun: false, status: false, doctor: false, pruneMode: 'safe', report: false, reportDays: 7, workspaceFolder: null };
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--full' || args[i] === '--force') {
       options.full = true;
+    } else if (args[i] === '--dry-run') {
+      options.dryRun = true;
+    } else if (args[i] === '--status') {
+      options.status = true;
+    } else if (args[i] === '--doctor') {
+      options.doctor = true;
     } else if (args[i] === '--report') {
       options.report = true;
     } else if (args[i] === '--prune' && args[i + 1]) {
@@ -121,6 +131,16 @@ function parseRetentionRuns(config) {
   return parseLimit(configured, 250, 10000);
 }
 
+function parseLimits(config) {
+  const limits = config.limits || {};
+  return {
+    maxPages: parseLimit(limits.maxPages, 5000, 100000),
+    maxBlocksPerPage: parseLimit(limits.maxBlocksPerPage, 20000, 1000000),
+    maxMarkdownBytesPerPage: parseLimit(limits.maxMarkdownBytesPerPage, 5 * 1024 * 1024, 100 * 1024 * 1024),
+    maxRunMinutes: parseLimit(limits.maxRunMinutes, 60, 24 * 60),
+  };
+}
+
 function shortPageId(pageId) {
   return normalizeId(pageId).replace(/-/g, '').slice(0, 8);
 }
@@ -140,7 +160,8 @@ async function getDatabaseQueryTarget(databaseId) {
 }
 
 async function queryDatabasePages(databaseConfig) {
-  const limit = parseLimit(databaseConfig.limit, 100, 10000);
+  const configuredMax = databaseConfig._limits?.maxPages || 10000;
+  const limit = parseLimit(databaseConfig.limit, 100, configuredMax);
   const targetId = await getDatabaseQueryTarget(databaseConfig.databaseId);
   const pages = [];
   let cursor = null;
@@ -162,7 +183,8 @@ async function queryDatabasePages(databaseConfig) {
 }
 
 async function searchWorkspacePages(workspaceConfig) {
-  const limit = parseLimit(workspaceConfig.limit, 5000, 5000);
+  const configuredMax = workspaceConfig._limits?.maxPages || 5000;
+  const limit = parseLimit(workspaceConfig.limit, 5000, configuredMax);
   const pages = [];
   let cursor = null;
 
@@ -335,6 +357,50 @@ function formatSyncReport(report, manifestPath) {
   return lines.join('\n');
 }
 
+function writeReportOutputs(config, report, text) {
+  const outputFile = config.report?.outputFile;
+  if (outputFile) {
+    const safePath = resolveSafePath(outputFile, { mode: 'write' });
+    fs.mkdirSync(path.dirname(safePath), { recursive: true });
+    fs.writeFileSync(safePath, text + '\n', 'utf8');
+  }
+  const webhookUrl = config.report?.webhookUrl || (config.report?.webhookEnv ? process.env[config.report.webhookEnv] : null);
+  if (webhookUrl) {
+    postWebhook(webhookUrl, { text, report }).catch(error => {
+      log(`Report webhook failed: ${error.message}`);
+    });
+  }
+}
+
+function postWebhook(webhookUrl, payload) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(webhookUrl);
+    if (url.protocol !== 'https:') {
+      reject(new Error('Report webhook URL must use https'));
+      return;
+    }
+    const body = JSON.stringify(payload);
+    const req = https.request({
+      method: 'POST',
+      hostname: url.hostname,
+      path: `${url.pathname}${url.search}`,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, res => {
+      res.resume();
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve();
+        else reject(new Error(`Webhook returned HTTP ${res.statusCode}`));
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 function configuredOutDir(config) {
   return config.outDir || DEFAULT_OUT_DIR;
 }
@@ -463,6 +529,130 @@ function syncReport(config, options = {}) {
   return combineReports(outputs.map(output => reportForOutput(output, days)), days);
 }
 
+function workspaceConfigs(config) {
+  if (!Array.isArray(config.workspaces) || config.workspaces.length === 0) return [{ name: config.name || 'default', config }];
+  const base = { ...config };
+  delete base.workspaces;
+  return config.workspaces.map((workspace, index) => ({
+    name: workspace.name || workspace.workspaceFolder || `workspace-${index + 1}`,
+    tokenEnv: workspace.tokenEnv || null,
+    config: {
+      ...base,
+      ...workspace,
+      workspace: { ...(base.workspace || {}), ...(workspace.workspace || {}) },
+      sync: { ...(base.sync || {}), ...(workspace.sync || {}) },
+      report: { ...(base.report || {}), ...(workspace.report || {}) },
+      limits: { ...(base.limits || {}), ...(workspace.limits || {}) },
+      databases: workspace.databases ?? base.databases ?? [],
+      pages: workspace.pages ?? base.pages ?? [],
+    },
+  }));
+}
+
+async function withWorkspaceToken(workspace, fn) {
+  if (!workspace.tokenEnv) return fn();
+  const previous = process.env.NOTION_API_KEY;
+  if (process.env[workspace.tokenEnv]) process.env.NOTION_API_KEY = process.env[workspace.tokenEnv];
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.NOTION_API_KEY;
+    else process.env.NOTION_API_KEY = previous;
+  }
+}
+
+async function mirrorConfigAll(config, options = {}) {
+  const workspaces = workspaceConfigs(config);
+  if (workspaces.length === 1) return mirrorConfig(workspaces[0].config, options);
+  const results = [];
+  for (const workspace of workspaces) {
+    const result = await withWorkspaceToken(workspace, () => mirrorConfig(workspace.config, options));
+    results.push({ name: workspace.name, ...result });
+  }
+  return {
+    multiWorkspace: true,
+    workspaces: results,
+    run: {
+      seen: results.reduce((sum, result) => sum + (result.run?.seen || 0), 0),
+      refreshed: results.reduce((sum, result) => sum + (result.run?.refreshed || 0), 0),
+      skipped: results.reduce((sum, result) => sum + (result.run?.skipped || 0), 0),
+      pruned: results.reduce((sum, result) => sum + (result.run?.pruned || 0), 0),
+    },
+  };
+}
+
+function mirrorStatus(config, options = {}) {
+  const outputs = resolveLocalReportOutputs(config, options);
+  const statuses = outputs.map(output => {
+    const safeOutDir = resolveSafePath(output.outDir, { mode: 'write' });
+    const manifest = loadManifest(safeOutDir);
+    const pages = Object.values(manifest.pages || {});
+    const missingFiles = pages.filter(entry => !entry.path || !fs.existsSync(resolveSafePath(entry.path, { mode: 'write' })));
+    const lastRun = manifest.lastRun || null;
+    const indexFreshness = checkIndexFreshness(config, manifest);
+    return {
+      outDir: path.relative(process.cwd(), safeOutDir) || '.',
+      workspaceFolder: output.workspaceFolder,
+      manifestPath: path.relative(process.cwd(), path.join(safeOutDir, MANIFEST_FILE)),
+      pageCount: pages.length,
+      missingFileCount: missingFiles.length,
+      lastRun,
+      indexFreshness,
+    };
+  });
+  return {
+    workspaceCount: statuses.length,
+    statuses,
+  };
+}
+
+function checkIndexFreshness(config, manifest) {
+  const freshnessFile = config.searchIndex?.freshnessFile;
+  if (!freshnessFile || !manifest.lastRun?.completedAt) {
+    return { configured: Boolean(freshnessFile), fresh: null };
+  }
+  const safePath = resolveSafePath(freshnessFile, { mode: 'read' });
+  if (!fs.existsSync(safePath)) return { configured: true, fresh: false, reason: 'freshness file missing' };
+  const indexMtime = fs.statSync(safePath).mtimeMs;
+  const lastRunTime = Date.parse(manifest.lastRun.completedAt);
+  return {
+    configured: true,
+    fresh: indexMtime >= lastRunTime,
+    indexMtime: new Date(indexMtime).toISOString(),
+    lastRunCompletedAt: manifest.lastRun.completedAt,
+  };
+}
+
+async function doctor(config, options = {}) {
+  const checks = [];
+  function add(name, ok, detail = '') {
+    checks.push({ name, ok, detail });
+  }
+
+  add('config', true, 'config parsed');
+  try {
+    const outputs = resolveLocalReportOutputs(config, options);
+    add('local manifests', outputs.length > 0, `${outputs.length} candidate folder(s)`);
+  } catch (error) {
+    add('local manifests', false, error.message);
+  }
+  add('api token', Boolean(process.env.NOTION_API_KEY), process.env.NOTION_API_KEY ? 'NOTION_API_KEY is set' : 'NOTION_API_KEY is missing');
+  if (process.env.NOTION_API_KEY) {
+    try {
+      const info = await getWorkspaceInfo();
+      add('notion api', true, info.workspaceName || info.botName || 'connected');
+    } catch (error) {
+      add('notion api', false, error.message);
+    }
+  }
+  const status = mirrorStatus(config, options);
+  return {
+    ok: checks.every(check => check.ok),
+    checks,
+    status,
+  };
+}
+
 function resolveFailureOutput(config, options = {}) {
   if (options.workspaceFolder) return localOutputForWorkspaceFolder(config, options.workspaceFolder);
 
@@ -548,7 +738,7 @@ async function resolveMirrorOutDir(config) {
 }
 
 async function processCandidate(candidate, context) {
-  const { outDir, manifest, full, now, results, seenPageIds } = context;
+  const { outDir, manifest, full, now, results, seenPageIds, dryRun, limits } = context;
   const pageId = normalizeId(candidate.page.id || candidate.pageId);
   const expectedRelativePath = candidate.relativePath || defaultPagePath(candidate.page);
   assertRelativePath(expectedRelativePath);
@@ -563,6 +753,19 @@ async function processCandidate(candidate, context) {
     return;
   }
 
+  if (dryRun) {
+    const dryEntry = {
+      pageId,
+      title: titleFromPageResult(candidate.page),
+      notionLastEditedTime: candidate.page.last_edited_time || '',
+      relativePath: expectedRelativePath,
+      previousPath: existing?.path || '',
+      syncStatus: existing ? 'would_refresh_changed' : 'would_refresh_new',
+    };
+    results.refreshed.push(dryEntry);
+    return;
+  }
+
   const entry = await mirrorPage({
     pageId,
     page: candidate.page,
@@ -572,12 +775,15 @@ async function processCandidate(candidate, context) {
     previousEntry: existing,
     lastSeenAt: now,
     lastCheckedAt: now,
+    limits,
     saveManifest: false,
   });
   results.refreshed.push(entry);
 }
 
 async function mirrorConfig(config, options = {}) {
+  const limits = parseLimits(config);
+  const startedAtMs = Date.now();
   const output = await resolveMirrorOutDir(config);
   const outDir = output.outDir;
   const safeOutDir = resolveSafePath(outDir, { mode: 'write' });
@@ -614,6 +820,7 @@ async function mirrorConfig(config, options = {}) {
     workspaceInfo: output.workspaceInfo,
     full: run.full,
     pruneMode: run.pruneMode,
+    dryRun: Boolean(options.dryRun),
     discovery: [],
   };
   const seenPageIds = new Set();
@@ -624,10 +831,12 @@ async function mirrorConfig(config, options = {}) {
     now,
     results,
     seenPageIds,
+    dryRun: Boolean(options.dryRun),
+    limits,
   };
 
   if (shouldMirrorWorkspace(config)) {
-    const workspace = config.workspace || {};
+    const workspace = { ...(config.workspace || {}), _limits: limits };
     const workspaceResult = await searchWorkspacePages(workspace);
     run.discoveryComplete = run.discoveryComplete && workspaceResult.complete;
     results.discovery.push({
@@ -639,6 +848,7 @@ async function mirrorConfig(config, options = {}) {
     const prefix = workspace.pathPrefix ? sanitizeRelativePathPrefix(workspace.pathPrefix) : '';
 
     for (const page of workspaceResult.pages) {
+      if ((Date.now() - startedAtMs) > limits.maxRunMinutes * 60 * 1000) throw new Error(`Run limit exceeded; maxRunMinutes=${limits.maxRunMinutes}`);
       const title = titleFromPageResult(page);
       const relativePath = generatedMirrorPath(prefix, title, page.id);
       await processCandidate({
@@ -650,6 +860,7 @@ async function mirrorConfig(config, options = {}) {
   }
 
   for (const page of config.pages || []) {
+    if ((Date.now() - startedAtMs) > limits.maxRunMinutes * 60 * 1000) throw new Error(`Run limit exceeded; maxRunMinutes=${limits.maxRunMinutes}`);
     if (!page.pageId) throw new Error('Each pages[] entry requires pageId');
     const pageMetadata = await getPage(page.pageId);
     await processCandidate({
@@ -661,7 +872,7 @@ async function mirrorConfig(config, options = {}) {
 
   for (const database of config.databases || []) {
     if (!database.databaseId) throw new Error('Each databases[] entry requires databaseId');
-    const databaseResult = await queryDatabasePages(database);
+    const databaseResult = await queryDatabasePages({ ...database, _limits: limits });
     run.discoveryComplete = run.discoveryComplete && databaseResult.complete;
     results.discovery.push({
       source: 'database',
@@ -674,6 +885,7 @@ async function mirrorConfig(config, options = {}) {
     const prefix = database.pathPrefix ? sanitizeRelativePathPrefix(database.pathPrefix) : '';
 
     for (const page of databaseResult.pages) {
+      if ((Date.now() - startedAtMs) > limits.maxRunMinutes * 60 * 1000) throw new Error(`Run limit exceeded; maxRunMinutes=${limits.maxRunMinutes}`);
       const title = titleFromPageResult(page);
       const relativePath = generatedMirrorPath(prefix, title, page.id);
       await processCandidate({
@@ -688,6 +900,17 @@ async function mirrorConfig(config, options = {}) {
     run.pruneAttempted = true;
     for (const [pageId, entry] of Object.entries(manifest.pages || {})) {
       if (seenPageIds.has(pageId)) continue;
+      if (options.dryRun) {
+        results.pruned.push({
+          pageId,
+          title: entry.title || '',
+          path: entry.path || '',
+          deletedFile: false,
+          dryRun: true,
+          prunedAt: now,
+        });
+        continue;
+      }
       const pruned = safePruneFile(safeOutDir, entry);
       results.pruned.push({
         pageId,
@@ -718,8 +941,10 @@ async function mirrorConfig(config, options = {}) {
     botName: output.workspaceInfo?.botName || '',
     botId: output.workspaceInfo?.botId || '',
   };
-  pushRunHistory(manifest, run, retentionRuns);
-  saveManifest(safeOutDir, manifest);
+  if (!options.dryRun) {
+    pushRunHistory(manifest, run, retentionRuns);
+    saveManifest(safeOutDir, manifest);
+  }
   results.run = run;
 
   return results;
@@ -734,29 +959,54 @@ async function main() {
     config = readConfig(configPath);
     if (options.report) {
       const report = await syncReport(config, options);
+      const reportText = formatSyncReport(report, report.manifestPath);
+      writeReportOutputs(config, report, reportText);
       if (hasJsonFlag()) {
         console.log(JSON.stringify(report, null, 2));
       } else {
-        console.log(formatSyncReport(report, report.manifestPath));
+        console.log(reportText);
       }
       return;
     }
+    if (options.status) {
+      const status = mirrorStatus(config, options);
+      if (hasJsonFlag()) console.log(JSON.stringify(status, null, 2));
+      else {
+        console.log(`Mirror status: ${status.workspaceCount} workspace folder(s)`);
+        for (const item of status.statuses) {
+          console.log(`- ${item.workspaceFolder || '(root)'} pages=${item.pageCount} missing=${item.missingFileCount} manifest=${item.manifestPath}`);
+          if (item.lastRun) console.log(`  lastRun=${item.lastRun.completedAt || item.lastRun.startedAt || 'unknown'} refreshed=${item.lastRun.refreshed || 0} pruned=${item.lastRun.pruned || 0} failed=${item.lastRun.failed ? 'yes' : 'no'}`);
+          if (item.indexFreshness?.configured) console.log(`  indexFresh=${item.indexFreshness.fresh}`);
+        }
+      }
+      return;
+    }
+    if (options.doctor) {
+      const result = await doctor(config, options);
+      if (hasJsonFlag()) console.log(JSON.stringify(result, null, 2));
+      else {
+        console.log(`Doctor: ${result.ok ? 'ok' : 'problems found'}`);
+        for (const check of result.checks) console.log(`- ${check.ok ? 'ok' : 'fail'} ${check.name}: ${check.detail}`);
+      }
+      if (!result.ok) process.exit(1);
+      return;
+    }
 
-    const results = await mirrorConfig(config, options);
+    const results = await mirrorConfigAll(config, options);
 
     if (hasJsonFlag()) {
       console.log(JSON.stringify(results, null, 2));
     } else {
-      log(`Notion mirror sync complete into ${results.outDir}`);
+      log(`Notion mirror sync complete${results.outDir ? ` into ${results.outDir}` : ''}`);
       log(`  Seen: ${results.run.seen}`);
       log(`  Refreshed: ${results.run.refreshed}`);
       log(`  Skipped unchanged: ${results.run.skipped}`);
       log(`  Pruned stale: ${results.run.pruned}`);
       if (results.run.pruneSkippedReason) log(`  Prune skipped: ${results.run.pruneSkippedReason}`);
-      if (!results.run.discoveryComplete) log('  Discovery: incomplete');
+      if (results.run.discoveryComplete === false) log('  Discovery: incomplete');
       if (results.full) log('  Mode: full reconciliation');
-      for (const result of results.refreshed) log(`  - refreshed ${result.title}: ${result.path}`);
-      for (const result of results.pruned) log(`  - pruned ${result.title || result.pageId}: ${result.path}`);
+      for (const result of results.refreshed || []) log(`  - refreshed ${result.title}: ${result.path || result.relativePath || ''}`);
+      for (const result of results.pruned || []) log(`  - ${result.dryRun ? 'would prune' : 'pruned'} ${result.title || result.pageId}: ${result.path}`);
       log('Mode: read-only cache; edit Notion directly');
     }
   } catch (error) {

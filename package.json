@@ -12,6 +12,9 @@
     "notion-mirror-config": "scripts/mirror-config.js",
     "notion-install-scheduler": "scripts/install-scheduler.js"
   },
+  "scripts": {
+    "test": "node --test"
+  },
   "engines": {
     "node": ">=18"
   }

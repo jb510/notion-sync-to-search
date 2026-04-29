@@ -5,7 +5,17 @@
     "intervalMinutes": 60
   },
   "report": {
-    "retentionRuns": 250
+    "retentionRuns": 250,
+    "outputFile": ""
+  },
+  "limits": {
+    "maxPages": 5000,
+    "maxBlocksPerPage": 20000,
+    "maxMarkdownBytesPerPage": 5242880,
+    "maxRunMinutes": 60
+  },
+  "searchIndex": {
+    "freshnessFile": ""
   },
   "syncScope": "integration-visible-workspace",
   "workspace": {

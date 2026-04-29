@@ -71,13 +71,18 @@ function yamlString(value) {
 }
 
 function frontmatter(page, pageId, mirroredAt) {
+  const parent = page.parent || {};
   return [
     '---',
     'source: notion',
     'mirror_mode: read_only',
+    `notion_object: ${yamlString(page.object || 'page')}`,
     `notion_page_id: ${yamlString(pageId)}`,
     `notion_url: ${yamlString(page.url || '')}`,
     `notion_last_edited_time: ${yamlString(page.last_edited_time || '')}`,
+    `notion_archived: ${page.archived ? 'true' : 'false'}`,
+    `notion_parent_type: ${yamlString(parent.type || '')}`,
+    `notion_parent_id: ${yamlString(parent[parent.type] || '')}`,
     `mirrored_at: ${yamlString(mirroredAt)}`,
     '---',
     '',
@@ -208,8 +213,14 @@ async function mirrorPage(options) {
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
-  const blocks = await getAllBlocks(pageId);
+  const blocks = await getAllBlocks(pageId, {
+    maxBlocks: options.limits?.maxBlocksPerPage,
+  });
   const markdown = blocksToMarkdown(blocks);
+  const maxBytes = options.limits?.maxMarkdownBytesPerPage;
+  if (maxBytes && Buffer.byteLength(markdown, 'utf8') > maxBytes) {
+    throw new Error(`Markdown limit exceeded for ${pageId}; maxMarkdownBytesPerPage=${maxBytes}`);
+  }
   const mirroredAt = new Date().toISOString();
   const body = `${frontmatter(page, pageId, mirroredAt)}# ${title}\n\n${markdown.trim()}\n`;
 

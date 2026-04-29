@@ -66,7 +66,8 @@ function getApiKey() {
 function checkApiKey() {
   // Allow usage/help output without requiring credentials.
   if (hasHelpFlag()) return;
-  if (hasReportFlag()) return;
+  if (hasLocalOnlyFlag()) return;
+  if (process.argv.includes('--doctor')) return;
 
   if (!getApiKey()) {
     const message = 'No Notion API token found. Set NOTION_API_KEY in the environment.';
@@ -98,8 +99,8 @@ function hasHelpFlag() {
   return process.argv.includes('--help') || process.argv.includes('-h');
 }
 
-function hasReportFlag() {
-  return process.argv.includes('--report');
+function hasLocalOnlyFlag() {
+  return process.argv.includes('--report') || process.argv.includes('--status');
 }
 
 function log(msg) {
@@ -558,10 +559,11 @@ function blocksToMarkdown(blocks) {
 /**
  * Fetch all blocks from a page/block, handling pagination
  */
-async function getAllBlocks(blockId) {
+async function getAllBlocks(blockId, options = {}) {
   const normalizedId = normalizeId(blockId);
   let allBlocks = [];
   let cursor = null;
+  const maxBlocks = options.maxBlocks || Infinity;
 
   do {
     const encodedId = encodeURIComponent(normalizedId);
@@ -571,9 +573,15 @@ async function getAllBlocks(blockId) {
     const response = await notionRequest(path, 'GET');
 
     for (const block of response.results) {
+      if (allBlocks.length >= maxBlocks) {
+        const error = new Error(`Block limit exceeded for ${blockId}; maxBlocksPerPage=${maxBlocks}`);
+        error.code = 'BLOCK_LIMIT_EXCEEDED';
+        throw error;
+      }
       allBlocks.push(block);
       if (block.has_children) {
-        const childBlocks = await getAllBlocks(block.id);
+        const remaining = maxBlocks - allBlocks.length;
+        const childBlocks = await getAllBlocks(block.id, { ...options, maxBlocks: remaining });
         allBlocks = allBlocks.concat(childBlocks);
       }
     }
@@ -593,7 +601,7 @@ module.exports = {
   stripTokenArg,
   hasJsonFlag,
   hasHelpFlag,
-  hasReportFlag,
+  hasLocalOnlyFlag,
   log,
   resolveSafePath,
   writeFileAtomic,

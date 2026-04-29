@@ -64,7 +64,7 @@ notion-sync-read-only/.notion-search-mirror.json
 Refresh the local Notion knowledge-base mirror.
 
 ```bash
-node scripts/mirror-config.js config/notion-search-mirror.json [--json]
+node scripts/mirror-config.js config/notion-search-mirror.json [--dry-run] [--status] [--doctor] [--json]
 ```
 
 Config shape:
@@ -77,7 +77,17 @@ Config shape:
     "intervalMinutes": 60
   },
   "report": {
-    "retentionRuns": 250
+    "retentionRuns": 250,
+    "outputFile": ""
+  },
+  "limits": {
+    "maxPages": 5000,
+    "maxBlocksPerPage": 20000,
+    "maxMarkdownBytesPerPage": 5242880,
+    "maxRunMinutes": 60
+  },
+  "searchIndex": {
+    "freshnessFile": ""
   },
   "syncScope": "integration-visible-workspace",
   "workspace": {
@@ -225,11 +235,21 @@ Report recent sync activity without syncing:
 
 ```bash
 node scripts/mirror-config.js config/notion-search-mirror.json --report --days 7
+node scripts/mirror-config.js config/notion-search-mirror.json --status
+node scripts/mirror-config.js config/notion-search-mirror.json --doctor
 ```
 
 Reports include failures and pruned pages recorded in the manifest run history. They are local-only and discover existing workspace manifests under `outDir`; use `--workspace-folder <name>` to select one workspace folder.
 
 Run history retention defaults to 250 runs. Configure with `report.retentionRuns`.
+
+`--dry-run` discovers what would refresh or prune without writing markdown, updating manifests, or deleting files.
+
+`limits` bounds page count, page block count, markdown bytes per page, and run duration.
+
+`searchIndex.freshnessFile` enables a simple local freshness check by comparing a search backend marker file mtime to the last completed mirror run.
+
+Multiple workspace configs can be supplied with `workspaces[]`; each entry may set `workspaceFolder`, `tokenEnv`, `pages`, `databases`, and other per-workspace overrides.
 
 The OpenClaw memory/search backend is responsible for indexing the changed local markdown. If search looks stale after resync, refresh/reindex/restart the active memory/search backend for that install.
 
