@@ -292,6 +292,24 @@ The scripts are deliberately conservative with the Notion API:
 
 Add the mirror folder to whichever OpenClaw memory/search backend indexes local markdown for each install. QMD is one supported example, not a requirement.
 
+### QMD and embeddings
+
+When OpenClaw uses QMD, this skill should only expose the read-only mirror to QMD. It should not set `agents.defaults.memorySearch.provider` to `openai`, `local`, or any other embedding provider just to make Notion searchable.
+
+QMD has its own local vector embedding path and commonly reports the bundled/default model as `embeddinggemma-300M-GGUF` / `embeddinggemma-300M-Q8_0`. That QMD vector index is managed by QMD commands such as `qmd update`, `qmd embed`, `qmd query`, and `qmd vsearch`. The Notion mirror is just another markdown collection for QMD to index.
+
+Do not route this mirror through OpenAI embeddings unless the user explicitly wants that separate OpenClaw memory-provider behavior. OpenAI embeddings may still be used by other systems, such as OpenBrain, but that is independent of this skill.
+
+If OpenClaw reports `vector=false`, verify QMD directly before changing config:
+
+```bash
+qmd status
+qmd search "known Notion page title"
+qmd vsearch "semantic query"
+```
+
+Direct QMD status is the source of truth for whether QMD has vectors for its own index. The skill does not need a `vector=true` setting; it only needs the mirror path included in the memory/search paths.
+
 For OpenClaw installs with multiple agent workspaces, use the helper script from the primary workspace that contains the synced mirror:
 
 ```bash
