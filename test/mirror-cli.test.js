@@ -20,6 +20,15 @@ function run(args, options = {}) {
   });
 }
 
+function runFailure(args, options = {}) {
+  try {
+    run(args, options);
+  } catch (error) {
+    return error;
+  }
+  throw new Error('Expected command to fail');
+}
+
 test('report is local-only and includes pruned pages', () => {
   const dir = tmpdir();
   test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -62,4 +71,29 @@ test('status is local-only', () => {
   const parsed = JSON.parse(output);
   assert.equal(parsed.workspaceCount, 1);
   assert.equal(parsed.statuses[0].pageCount, 0);
+});
+
+test('multi-workspace config validates tokenEnv without requiring global token', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const configPath = path.join(dir, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    outDir: path.join(dir, 'mirror'),
+    workspaces: [
+      { name: 'Work', workspaceFolder: 'Work', tokenEnv: 'NOTION_API_KEY_WORK' },
+      { name: 'Personal', workspaceFolder: 'Personal', tokenEnv: 'NOTION_API_KEY_PERSONAL' },
+    ],
+  }));
+
+  const error = runFailure([configPath, '--json'], {
+    env: {
+      NOTION_API_KEY: '',
+      NOTION_API_KEY_WORK: 'ntn_fake',
+      NOTION_API_KEY_PERSONAL: '',
+    },
+  });
+  const parsed = JSON.parse(error.stdout);
+  assert.match(parsed.error, /Personal/);
+  assert.match(parsed.error, /NOTION_API_KEY_PERSONAL/);
+  assert.doesNotMatch(parsed.error, /NOTION_API_KEY_WORK/);
 });

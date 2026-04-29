@@ -269,6 +269,8 @@ Multiple workspaces can be configured in one file. Each entry may name a differe
 }
 ```
 
+When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`.
+
 To generate scheduler files for a daily or weekly report:
 
 ```bash

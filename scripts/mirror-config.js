@@ -5,10 +5,8 @@
  */
 
 const fs = require('fs');
-const https = require('https');
 const path = require('path');
 const {
-  checkApiKey,
   notionRequest,
   normalizeId,
   stripTokenArg,
@@ -364,41 +362,6 @@ function writeReportOutputs(config, report, text) {
     fs.mkdirSync(path.dirname(safePath), { recursive: true });
     fs.writeFileSync(safePath, text + '\n', 'utf8');
   }
-  const webhookUrl = config.report?.webhookUrl || (config.report?.webhookEnv ? process.env[config.report.webhookEnv] : null);
-  if (webhookUrl) {
-    postWebhook(webhookUrl, { text, report }).catch(error => {
-      log(`Report webhook failed: ${error.message}`);
-    });
-  }
-}
-
-function postWebhook(webhookUrl, payload) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(webhookUrl);
-    if (url.protocol !== 'https:') {
-      reject(new Error('Report webhook URL must use https'));
-      return;
-    }
-    const body = JSON.stringify(payload);
-    const req = https.request({
-      method: 'POST',
-      hostname: url.hostname,
-      path: `${url.pathname}${url.search}`,
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-      },
-    }, res => {
-      res.resume();
-      res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) resolve();
-        else reject(new Error(`Webhook returned HTTP ${res.statusCode}`));
-      });
-    });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
 }
 
 function configuredOutDir(config) {
@@ -549,6 +512,29 @@ function workspaceConfigs(config) {
   }));
 }
 
+function workspaceTokenStatus(config) {
+  return workspaceConfigs(config).map(workspace => {
+    const tokenEnv = workspace.tokenEnv || 'NOTION_API_KEY';
+    return {
+      name: workspace.name,
+      tokenEnv,
+      present: Boolean(process.env[tokenEnv]),
+    };
+  });
+}
+
+function assertSyncTokens(config) {
+  const missing = workspaceTokenStatus(config).filter(status => !status.present);
+  if (missing.length === 0) return;
+
+  const message = missing.length === 1
+    ? `No Notion API token found for ${missing[0].name}. Set ${missing[0].tokenEnv} in the environment.`
+    : `No Notion API token found for ${missing.map(status => `${status.name} (${status.tokenEnv})`).join(', ')}.`;
+  const error = new Error(message);
+  error.skipFailureRecord = true;
+  throw error;
+}
+
 async function withWorkspaceToken(workspace, fn) {
   if (!workspace.tokenEnv) return fn();
   const previous = process.env.NOTION_API_KEY;
@@ -636,7 +622,9 @@ async function doctor(config, options = {}) {
   } catch (error) {
     add('local manifests', false, error.message);
   }
-  add('api token', Boolean(process.env.NOTION_API_KEY), process.env.NOTION_API_KEY ? 'NOTION_API_KEY is set' : 'NOTION_API_KEY is missing');
+  for (const status of workspaceTokenStatus(config)) {
+    add(`api token: ${status.name}`, status.present, status.present ? `${status.tokenEnv} is set` : `${status.tokenEnv} is missing`);
+  }
   if (process.env.NOTION_API_KEY) {
     try {
       const info = await getWorkspaceInfo();
@@ -992,6 +980,7 @@ async function main() {
       return;
     }
 
+    assertSyncTokens(config);
     const results = await mirrorConfigAll(config, options);
 
     if (hasJsonFlag()) {
@@ -1010,7 +999,7 @@ async function main() {
       log('Mode: read-only cache; edit Notion directly');
     }
   } catch (error) {
-    if (config && !options?.report) {
+    if (config && !options?.report && !error.skipFailureRecord) {
       try {
         await recordSyncFailure(config, options || {}, error);
       } catch (_) {
@@ -1027,7 +1016,6 @@ async function main() {
 }
 
 if (require.main === module) {
-  checkApiKey();
   main();
 } else {
   module.exports = { mirrorConfig };

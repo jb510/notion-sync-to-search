@@ -165,7 +165,7 @@ Use workspace mirroring carefully. It mirrors only pages the integration can see
 - A string such as `"Work"` or `"Personal"` overrides the folder name.
 - `"none"` disables the workspace subfolder and uses the old flat output shape. Use that only when the operator explicitly asks for it.
 
-For multiple Notion workspaces, use one token/config per workspace. With `workspaceFolder: "auto"`, different workspace names naturally land in separate folders:
+For multiple Notion workspaces, either use one token/config per workspace or configure multiple entries in `workspaces[]`. With `workspaceFolder: "auto"`, different workspace names naturally land in separate folders:
 
 ```text
 notion-sync-read-only/Work/
@@ -343,6 +343,8 @@ Use `searchIndex.freshnessFile` when the local search backend can touch a marker
 ```
 
 For multiple Notion workspaces in one config, use `workspaces[]` with optional `tokenEnv` fields.
+
+When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`.
 
 OpenClaw memory/search will see mirror changes according to the active backend's normal indexing behavior. If search results still look stale, refresh/reindex/restart that memory backend as appropriate for the install.
 

@@ -249,7 +249,7 @@ Run history retention defaults to 250 runs. Configure with `report.retentionRuns
 
 `searchIndex.freshnessFile` enables a simple local freshness check by comparing a search backend marker file mtime to the last completed mirror run.
 
-Multiple workspace configs can be supplied with `workspaces[]`; each entry may set `workspaceFolder`, `tokenEnv`, `pages`, `databases`, and other per-workspace overrides.
+Multiple workspace configs can be supplied with `workspaces[]`; each entry may set `workspaceFolder`, `tokenEnv`, `pages`, `databases`, and other per-workspace overrides. When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`.
 
 The OpenClaw memory/search backend is responsible for indexing the changed local markdown. If search looks stale after resync, refresh/reindex/restart the active memory/search backend for that install.
 
