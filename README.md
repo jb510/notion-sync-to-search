@@ -90,6 +90,12 @@ Manual full reconciliation refetches every currently visible page, rewrites its 
 node scripts/mirror-config.js config/notion-search-mirror.json --full
 ```
 
+Generate a sync report without syncing:
+
+```bash
+node scripts/mirror-config.js config/notion-search-mirror.json --report --days 7
+```
+
 ## Scope Modes
 
 `syncScope` controls the source scope:
@@ -161,7 +167,7 @@ Each normal refresh is incremental:
 - It checks each page's Notion `last_edited_time`.
 - If the manifest already has the same `last_edited_time` and the local markdown file exists, it skips fetching page blocks.
 - If the page is new or changed, it fetches current blocks and rewrites only that page's markdown.
-- If a previously mirrored page is no longer visible from the current discovery/config, it removes that page from the manifest and prunes the generated local markdown file.
+- If a previously mirrored page is no longer visible from the current discovery/config, it removes that page from the manifest and prunes the generated local markdown file only when discovery completed safely.
 - It records `lastSeenAt`, `lastCheckedAt`, `mirroredAt`, and a bounded run history in `notion-sync-read-only/.notion-search-mirror.json`.
 
 The scheduler runs:
@@ -172,7 +178,19 @@ node scripts/mirror-config.js config/notion-search-mirror.json
 
 That command updates markdown files under `notion-sync-read-only/` only for new or changed pages and updates `.notion-search-mirror.json`. OpenClaw's memory/search backend then sees changed local markdown according to that backend's normal indexing behavior. Some installs may pick up file changes quickly; others may need the user to restart/reindex/refresh memory search.
 
-Manual refresh exists for debugging and immediate catch-up, not as the expected steady-state workflow. Use `--full` when you want a manual reconciliation that ignores the manifest and refetches all currently visible pages. Use `--no-prune` only for troubleshooting when you need stale local files kept temporarily.
+Manual refresh exists for debugging and immediate catch-up, not as the expected steady-state workflow. Use `--full` when you want a manual reconciliation that ignores the manifest and refetches all currently visible pages.
+
+Pruning is safe by default:
+
+```bash
+node scripts/mirror-config.js config/notion-search-mirror.json --prune safe
+```
+
+- `safe` prunes only after complete discovery.
+- `off` disables pruning.
+- `force` prunes even if discovery was bounded by a limit. Use this only when you intentionally want the current result set to define the complete mirror.
+
+`--no-prune` is an alias for `--prune off`.
 
 Control the scheduled refresh interval with `sync.intervalMinutes`:
 
@@ -185,6 +203,20 @@ Control the scheduled refresh interval with `sync.intervalMinutes`:
 ```
 
 After changing that value, regenerate or reinstall the host scheduler with `scripts/install-scheduler.js`. Already-installed launchd/systemd/cron entries do not automatically update themselves from the config file.
+
+Reports use the manifest run history and include failures and pruned pages:
+
+```bash
+node scripts/mirror-config.js config/notion-search-mirror.json --report --days 1
+node scripts/mirror-config.js config/notion-search-mirror.json --report --days 7
+```
+
+To generate scheduler files for a daily or weekly report:
+
+```bash
+node scripts/install-scheduler.js --config config/notion-search-mirror.json --report --days 1 --every 1440
+node scripts/install-scheduler.js --config config/notion-search-mirror.json --report --days 7 --every 10080
+```
 
 ## Notion API Limits
 

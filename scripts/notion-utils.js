@@ -106,6 +106,23 @@ function isPathInside(baseDir, targetPath) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+function assertNoSymlinkAncestors(baseDir, targetPath) {
+  const baseReal = fs.realpathSync(baseDir);
+  const absolute = path.resolve(targetPath);
+  const relative = path.relative(baseReal, absolute);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) return;
+
+  const parts = relative.split(path.sep).filter(Boolean);
+  let current = baseReal;
+  for (const part of parts.slice(0, -1)) {
+    current = path.join(current, part);
+    if (!fs.existsSync(current)) break;
+    if (fs.lstatSync(current).isSymbolicLink()) {
+      throw new Error(`Refusing to traverse symlinked path component: ${current}`);
+    }
+  }
+}
+
 function resolveSafePath(inputPath, options = {}) {
   const { mode = 'read' } = options;
 
@@ -136,6 +153,7 @@ function resolveSafePath(inputPath, options = {}) {
   }
 
   const workspaceRoot = fs.realpathSync(process.cwd());
+  assertNoSymlinkAncestors(workspaceRoot, absolute);
   if (!isPathInside(workspaceRoot, candidatePath)) {
     const action = mode === 'write' ? 'write to' : 'read from';
     throw new Error(
@@ -144,6 +162,42 @@ function resolveSafePath(inputPath, options = {}) {
   }
 
   return candidatePath;
+}
+
+function writeFileAtomic(filePath, body) {
+  const requestedPath = path.resolve(expandHomePath(filePath));
+  if (fs.existsSync(requestedPath) && fs.lstatSync(requestedPath).isSymbolicLink()) {
+    throw new Error(`Refusing to write through symlink: ${requestedPath}`);
+  }
+
+  const absolute = resolveSafePath(filePath, { mode: 'write' });
+  if (fs.existsSync(absolute) && fs.lstatSync(absolute).isSymbolicLink()) {
+    throw new Error(`Refusing to write through symlink: ${absolute}`);
+  }
+
+  const dir = path.dirname(absolute);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const tmpPath = path.join(dir, `.${path.basename(absolute)}.${process.pid}.${Date.now()}.tmp`);
+  const fd = fs.openSync(tmpPath, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, body, 'utf8');
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  fs.renameSync(tmpPath, absolute);
+  try {
+    const dirFd = fs.openSync(dir, 'r');
+    try {
+      fs.fsyncSync(dirFd);
+    } finally {
+      fs.closeSync(dirFd);
+    }
+  } catch (_) {
+    // Some platforms/filesystems do not support fsync on directories.
+  }
 }
 
 function stripTokenArg(args) {
@@ -536,6 +590,7 @@ module.exports = {
   hasHelpFlag,
   log,
   resolveSafePath,
+  writeFileAtomic,
   expandHomePath,
   wrapNetworkError,
 

@@ -3,4 +3,5 @@ node_modules/
 .env
 .notion-token
 knowledge/notion-sync-read-only/
+notion-sync-read-only/
 *.log

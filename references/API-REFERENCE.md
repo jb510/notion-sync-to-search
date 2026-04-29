@@ -72,6 +72,10 @@ Config shape:
 ```json
 {
   "outDir": "notion-sync-read-only",
+  "workspaceFolder": "auto",
+  "sync": {
+    "intervalMinutes": 60
+  },
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",
@@ -89,6 +93,12 @@ Database entries may include Notion API `filter` and `sorts` payloads.
 
 - `integration-visible-workspace` is the normal knowledge-base mode. It mirrors every page returned by Notion search for the integration.
 - `selected` is an advanced narrowing mode. It mirrors only configured `pages[]` and `databases[]`.
+
+`workspaceFolder` controls the folder under `outDir`:
+
+- `"auto"` uses the Notion integration bot's workspace name.
+- A string overrides the folder name.
+- `"none"` disables workspace subfolders.
 
 ### Config Population
 
@@ -146,6 +156,10 @@ Default integration-visible workspace config:
 ```json
 {
   "outDir": "notion-sync-read-only",
+  "workspaceFolder": "auto",
+  "sync": {
+    "intervalMinutes": 60
+  },
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",
@@ -166,11 +180,13 @@ Generated database/workspace paths include a short page ID suffix, such as `Topi
 Print or install launchd/systemd/cron scheduler entries for recurring mirror refresh.
 
 ```bash
-node scripts/install-scheduler.js [--config config/notion-search-mirror.json] [--every 60] [--mode print|install] [--json]
+node scripts/install-scheduler.js [--config config/notion-search-mirror.json] [--every 60] [--report] [--days 7] [--mode print|install] [--json]
 ```
 
 - `--mode print` is the default. It prints scheduler files and activation commands.
 - `--mode install` writes scheduler files for launchd on macOS or systemd user timers on Linux.
+- Without `--every`, the helper reads `sync.intervalMinutes` from config.
+- `--report` schedules a report command instead of a sync command.
 - The scheduler helper does not store `NOTION_API_KEY`; configure that secret in the scheduler runtime environment.
 - The scheduled task runs `mirror-config.js`.
 
@@ -186,10 +202,29 @@ node scripts/mirror-config.js config/notion-search-mirror.json
 
 Effects:
 
-- Re-fetches configured pages/databases, or the integration-visible workspace when `syncScope` is `integration-visible-workspace`.
-- Writes refreshed markdown files under `outDir`.
-- Updates `outDir/.notion-search-mirror.json`.
+- Discovers configured pages/databases, or the integration-visible workspace when `syncScope` is `integration-visible-workspace`.
+- Re-fetches only new/changed pages unless `--full` is used.
+- Writes refreshed markdown files under the resolved workspace folder.
+- Updates the workspace folder's `.notion-search-mirror.json`.
 - Leaves `config/notion-search-mirror.json` unchanged.
+
+Pruning defaults to safe mode:
+
+```bash
+node scripts/mirror-config.js config/notion-search-mirror.json --prune safe
+node scripts/mirror-config.js config/notion-search-mirror.json --prune off
+node scripts/mirror-config.js config/notion-search-mirror.json --prune force
+```
+
+`safe` skips pruning when discovery is incomplete because a limit was reached. `force` prunes anyway.
+
+Report recent sync activity without syncing:
+
+```bash
+node scripts/mirror-config.js config/notion-search-mirror.json --report --days 7
+```
+
+Reports include failures and pruned pages recorded in the manifest run history.
 
 The OpenClaw memory/search backend is responsible for indexing the changed local markdown. If search looks stale after resync, refresh/reindex/restart the active memory/search backend for that install.
 

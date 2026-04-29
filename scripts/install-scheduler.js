@@ -20,7 +20,7 @@ const DEFAULT_NAME = 'notion-sync-to-search';
 const DEFAULT_EVERY_MINUTES = 60;
 
 function usage(exitCode = 0) {
-  console.log('Usage: install-scheduler.js [--config <path>] [--every <minutes>] [--name <name>] [--mode print|install] [--json]');
+  console.log('Usage: install-scheduler.js [--config <path>] [--every <minutes>] [--name <name>] [--report] [--days <n>] [--mode print|install] [--json]');
   console.log('');
   console.log('Examples:');
   console.log('  install-scheduler.js --config config/notion-search-mirror.json --every 60');
@@ -34,8 +34,11 @@ function parseArgs(argv) {
     configPath: DEFAULT_CONFIG,
     everyMinutes: null,
     name: DEFAULT_NAME,
+    nameSetByCli: false,
     mode: 'print',
     everySetByCli: false,
+    report: false,
+    reportDays: 7,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -45,7 +48,12 @@ function parseArgs(argv) {
       options.everyMinutes = parsePositiveInt(args[++i], DEFAULT_EVERY_MINUTES);
       options.everySetByCli = true;
     }
-    else if (args[i] === '--name' && args[i + 1]) options.name = sanitizeName(args[++i]);
+    else if (args[i] === '--name' && args[i + 1]) {
+      options.name = sanitizeName(args[++i]);
+      options.nameSetByCli = true;
+    }
+    else if (args[i] === '--report') options.report = true;
+    else if (args[i] === '--days' && args[i + 1]) options.reportDays = parsePositiveInt(args[++i], 7);
     else if (args[i] === '--mode' && args[i + 1]) options.mode = parseMode(args[++i]);
     else throw new Error(`Unknown argument: ${args[i]}`);
   }
@@ -88,15 +96,20 @@ function buildContext(options) {
   const configuredEvery = parsePositiveInt(config?.sync?.intervalMinutes, DEFAULT_EVERY_MINUTES);
   const scriptPath = path.resolve(__dirname, 'mirror-config.js');
   const nodePath = process.execPath;
-  const logPath = path.join(workdir, '.notion-sync-to-search.log');
+  const logPath = path.join(workdir, options.report ? '.notion-sync-to-search-report.log' : '.notion-sync-to-search.log');
+  const commandArgs = options.report
+    ? [scriptPath, configPath, '--report', '--days', String(options.reportDays)]
+    : [scriptPath, configPath];
 
   return {
     ...options,
+    name: options.report && !options.nameSetByCli ? `${options.name}-report` : options.name,
     everyMinutes: options.everySetByCli ? options.everyMinutes : configuredEvery,
     workdir,
     configPath,
     scriptPath,
     nodePath,
+    commandArgs,
     logPath,
   };
 }
@@ -123,8 +136,7 @@ function buildLaunchd(ctx) {
   <key>ProgramArguments</key>
   <array>
     <string>${xmlEscape(ctx.nodePath)}</string>
-    <string>${xmlEscape(ctx.scriptPath)}</string>
-    <string>${xmlEscape(ctx.configPath)}</string>
+${ctx.commandArgs.map(arg => `    <string>${xmlEscape(arg)}</string>`).join('\n')}
   </array>
   <key>StartInterval</key>
   <integer>${ctx.everyMinutes * 60}</integer>
@@ -153,7 +165,7 @@ function buildSystemd(ctx) {
   const unitDir = path.join(os.homedir(), '.config', 'systemd', 'user');
   const servicePath = path.join(unitDir, `${ctx.name}.service`);
   const timerPath = path.join(unitDir, `${ctx.name}.timer`);
-  const command = `mkdir -p ${shellQuote(path.dirname(ctx.logPath))} && ${shellQuote(ctx.nodePath)} ${shellQuote(ctx.scriptPath)} ${shellQuote(ctx.configPath)} >> ${shellQuote(ctx.logPath)} 2>&1`;
+  const command = `mkdir -p ${shellQuote(path.dirname(ctx.logPath))} && ${shellQuote(ctx.nodePath)} ${ctx.commandArgs.map(shellQuote).join(' ')} >> ${shellQuote(ctx.logPath)} 2>&1`;
 
   return {
     kind: 'systemd',
@@ -195,12 +207,32 @@ WantedBy=timers.target
 }
 
 function buildCron(ctx) {
-  const every = ctx.everyMinutes >= 60 ? '0 * * * *' : `*/${ctx.everyMinutes} * * * *`;
-  const command = `cd ${shellQuote(ctx.workdir)} && mkdir -p ${shellQuote(path.dirname(ctx.logPath))} && ${shellQuote(ctx.nodePath)} ${shellQuote(ctx.scriptPath)} ${shellQuote(ctx.configPath)} >> ${shellQuote(ctx.logPath)} 2>&1`;
+  const command = `cd ${shellQuote(ctx.workdir)} && mkdir -p ${shellQuote(path.dirname(ctx.logPath))} && ${shellQuote(ctx.nodePath)} ${ctx.commandArgs.map(shellQuote).join(' ')} >> ${shellQuote(ctx.logPath)} 2>&1`;
+  if (ctx.everyMinutes < 60) {
+    return {
+      kind: 'cron',
+      content: `*/${ctx.everyMinutes} * * * * ${command}`,
+      installNotes: [
+        'Add this line to the user crontab after ensuring NOTION_API_KEY is available to cron.',
+        'crontab -e',
+      ],
+    };
+  }
+
+  const intervalSeconds = ctx.everyMinutes * 60;
+  const stampPath = path.join(ctx.workdir, '.notion-sync-to-search.last-run');
+  const gatedCommand = [
+    `now=$(date +\\%s)`,
+    `last=$(cat ${shellQuote(stampPath)} 2>/dev/null || echo 0)`,
+    `if [ $((now - last)) -ge ${intervalSeconds} ]; then`,
+    `echo "$now" > ${shellQuote(stampPath)}`,
+    `${command}`,
+    'fi',
+  ].join('; ');
 
   return {
     kind: 'cron',
-    content: `${every} ${command}`,
+    content: `* * * * ${gatedCommand}`,
     installNotes: [
       'Add this line to the user crontab after ensuring NOTION_API_KEY is available to cron.',
       'crontab -e',

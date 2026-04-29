@@ -20,17 +20,21 @@ const {
   DEFAULT_OUT_DIR,
   getPage,
   getTitle,
+  assertRelativePath,
   isInside,
   loadManifest,
   saveManifest,
 } = require('./mirror-page.js');
 
 function usage(exitCode = 0) {
-  console.log('Usage: mirror-config.js <config.json> [--full] [--no-prune] [--json]');
+  console.log('Usage: mirror-config.js <config.json> [--full] [--prune safe|force|off] [--report] [--json]');
   console.log('');
   console.log('Options:');
   console.log('  --full      Refetch and rewrite every discovered page, even if last_edited_time is unchanged');
-  console.log('  --no-prune  Keep stale local mirror files that are no longer returned by Notion/config');
+  console.log('  --prune     safe (default), force, or off');
+  console.log('  --no-prune  Alias for --prune off');
+  console.log('  --report    Print a sync report from the existing manifest without syncing');
+  console.log('  --days      Report lookback window in days (default: 7)');
   console.log('');
   console.log('Config shape:');
   console.log(JSON.stringify({
@@ -49,17 +53,28 @@ function parseArgs(argv) {
   const args = stripTokenArg(argv);
   if (args.length < 1 || args[0] === '--help' || args[0] === '-h') usage(args[0] ? 0 : 1);
 
-  const options = { configPath: args[0], full: false, prune: true };
+  const options = { configPath: args[0], full: false, pruneMode: 'safe', report: false, reportDays: 7 };
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--full' || args[i] === '--force') {
       options.full = true;
+    } else if (args[i] === '--report') {
+      options.report = true;
+    } else if (args[i] === '--prune' && args[i + 1]) {
+      options.pruneMode = parsePruneMode(args[++i]);
+    } else if (args[i] === '--days' && args[i + 1]) {
+      options.reportDays = parseLimit(args[++i], 7, 365);
     } else if (args[i] === '--no-prune') {
-      options.prune = false;
+      options.pruneMode = 'off';
     } else {
       throw new Error(`Unknown argument: ${args[i]}`);
     }
   }
   return options;
+}
+
+function parsePruneMode(value) {
+  if (value === 'safe' || value === 'force' || value === 'off') return value;
+  throw new Error('--prune must be "safe", "force", or "off"');
 }
 
 function readConfig(configPath) {
@@ -106,6 +121,10 @@ function generatedMirrorPath(prefix, title, pageId) {
   return prefix ? path.join(prefix, filename) : filename;
 }
 
+function defaultPagePath(page) {
+  return `${sanitizePathSegment(titleFromPageResult(page))}.md`;
+}
+
 async function getDatabaseQueryTarget(databaseId) {
   const dbInfo = await notionRequest(`/v1/databases/${encodeURIComponent(normalizeId(databaseId))}`, 'GET');
   return dbInfo.data_sources?.[0]?.id || normalizeId(databaseId);
@@ -117,6 +136,7 @@ async function queryDatabasePages(databaseConfig) {
   const pages = [];
   let cursor = null;
 
+  let complete = true;
   do {
     const payload = { page_size: Math.min(limit - pages.length, 100) };
     if (cursor) payload.start_cursor = cursor;
@@ -125,10 +145,11 @@ async function queryDatabasePages(databaseConfig) {
 
     const result = await notionRequest(`/v1/data_sources/${encodeURIComponent(targetId)}/query`, 'POST', payload);
     pages.push(...result.results);
+    complete = !(result.has_more && pages.length >= limit);
     cursor = result.has_more && pages.length < limit ? result.next_cursor : null;
   } while (cursor && pages.length < limit);
 
-  return pages;
+  return { pages, complete, limit, targetId };
 }
 
 async function searchWorkspacePages(workspaceConfig) {
@@ -136,6 +157,7 @@ async function searchWorkspacePages(workspaceConfig) {
   const pages = [];
   let cursor = null;
 
+  let complete = true;
   do {
     const payload = {
       page_size: Math.min(limit - pages.length, 100),
@@ -147,10 +169,11 @@ async function searchWorkspacePages(workspaceConfig) {
 
     const result = await notionRequest('/v1/search', 'POST', payload);
     pages.push(...result.results);
+    complete = !(result.has_more && pages.length >= limit);
     cursor = result.has_more && pages.length < limit ? result.next_cursor : null;
   } while (cursor && pages.length < limit);
 
-  return pages;
+  return { pages, complete, limit };
 }
 
 async function getWorkspaceInfo() {
@@ -193,12 +216,20 @@ function manifestEntryFileExists(outDir, entry) {
   return isInside(outDir, filePath) && fs.existsSync(filePath) && !fs.lstatSync(filePath).isSymbolicLink();
 }
 
-function isUnchanged(existingEntry, page, outDir) {
+function entryMatchesExpectedPath(outDir, existingEntry, expectedRelativePath) {
+  if (!existingEntry || !expectedRelativePath) return false;
+  if (existingEntry.relativePath) return existingEntry.relativePath === expectedRelativePath;
+  const expectedPath = path.relative(process.cwd(), path.join(outDir, expectedRelativePath));
+  return existingEntry.path === expectedPath;
+}
+
+function isUnchanged(existingEntry, page, outDir, expectedRelativePath) {
   return Boolean(
     existingEntry
     && existingEntry.notionLastEditedTime
     && page.last_edited_time
     && existingEntry.notionLastEditedTime === page.last_edited_time
+    && entryMatchesExpectedPath(outDir, existingEntry, expectedRelativePath)
     && manifestEntryFileExists(outDir, existingEntry)
   );
 }
@@ -232,6 +263,125 @@ function pushRunHistory(manifest, run) {
   manifest.runs = Array.isArray(manifest.runs) ? manifest.runs : [];
   manifest.runs.unshift(run);
   manifest.runs = manifest.runs.slice(0, 20);
+}
+
+function summarizeRuns(manifest, days) {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  const runs = (Array.isArray(manifest.runs) ? manifest.runs : [])
+    .filter(run => Date.parse(run.startedAt || run.completedAt || '') >= cutoff);
+
+  const summary = {
+    days,
+    runCount: runs.length,
+    failedRuns: runs.filter(run => run.failed).length,
+    refreshed: runs.reduce((sum, run) => sum + (run.refreshed || 0), 0),
+    skipped: runs.reduce((sum, run) => sum + (run.skipped || 0), 0),
+    pruned: runs.reduce((sum, run) => sum + (run.pruned || 0), 0),
+    runs,
+    prunedPages: runs.flatMap(run => (run.prunedPages || []).map(page => ({
+      ...page,
+      runStartedAt: run.startedAt,
+      runCompletedAt: run.completedAt,
+    }))),
+    errors: runs.filter(run => run.failed || run.errors).map(run => ({
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+      error: run.error || '',
+      errors: run.errors || 0,
+    })),
+  };
+
+  return summary;
+}
+
+function formatSyncReport(report, manifestPath) {
+  const lines = [
+    `Notion sync report (${report.days} day${report.days === 1 ? '' : 's'})`,
+    `Manifest: ${manifestPath}`,
+    `Runs: ${report.runCount}`,
+    `Failures: ${report.failedRuns}`,
+    `Refreshed: ${report.refreshed}`,
+    `Skipped unchanged: ${report.skipped}`,
+    `Pruned: ${report.pruned}`,
+  ];
+
+  if (report.errors.length > 0) {
+    lines.push('', 'Errors:');
+    for (const error of report.errors) {
+      lines.push(`  - ${error.startedAt || error.completedAt || 'unknown time'}: ${error.error || `${error.errors} error(s)`}`);
+    }
+  }
+
+  if (report.prunedPages.length > 0) {
+    lines.push('', 'Pruned pages:');
+    for (const page of report.prunedPages) {
+      lines.push(`  - ${page.prunedAt || page.runCompletedAt || 'unknown time'} ${page.title || page.pageId}: ${page.path || ''}`);
+    }
+  }
+
+  if (report.runCount === 0) {
+    lines.push('', 'No sync runs found in this window.');
+  }
+
+  return lines.join('\n');
+}
+
+async function syncReport(config, options = {}) {
+  const output = await resolveMirrorOutDir(config);
+  const safeOutDir = resolveSafePath(output.outDir, { mode: 'write' });
+  const manifest = loadManifest(safeOutDir);
+  const manifestFile = path.relative(process.cwd(), path.join(safeOutDir, '.notion-search-mirror.json'));
+  return {
+    manifestPath: manifestFile,
+    outDir: path.relative(process.cwd(), safeOutDir) || '.',
+    workspaceFolder: output.workspaceFolder,
+    workspaceInfo: output.workspaceInfo,
+    ...summarizeRuns(manifest, options.reportDays || 7),
+  };
+}
+
+async function recordSyncFailure(config, options, error) {
+  let output;
+  try {
+    output = await resolveMirrorOutDir(config);
+  } catch (_) {
+    const baseOutDir = config.outDir || DEFAULT_OUT_DIR;
+    const fallbackFolder = config.workspaceFolder && config.workspaceFolder !== 'auto'
+      ? sanitizeFolderName(config.workspaceFolder)
+      : 'Notion Workspace';
+    output = {
+      outDir: config.workspaceFolder === 'none' ? baseOutDir : path.join(baseOutDir, fallbackFolder),
+      baseOutDir,
+      workspaceFolder: config.workspaceFolder === 'none' ? '' : fallbackFolder,
+      workspaceInfo: null,
+    };
+  }
+
+  const safeOutDir = resolveSafePath(output.outDir, { mode: 'write' });
+  fs.mkdirSync(safeOutDir, { recursive: true });
+  const manifest = loadManifest(safeOutDir);
+  const now = new Date().toISOString();
+  const run = {
+    startedAt: now,
+    completedAt: now,
+    failed: true,
+    error: error.message,
+    workspaceFolder: output.workspaceFolder,
+    workspaceName: output.workspaceInfo?.workspaceName || '',
+    workspaceId: output.workspaceInfo?.workspaceId || '',
+    full: Boolean(options.full),
+    pruneMode: options.pruneMode || 'safe',
+    discoveryComplete: false,
+    seen: 0,
+    refreshed: 0,
+    skipped: 0,
+    pruned: 0,
+    errors: 1,
+    prunedPages: [],
+  };
+  manifest.lastRun = run;
+  pushRunHistory(manifest, run);
+  saveManifest(safeOutDir, manifest);
 }
 
 async function resolveMirrorOutDir(config) {
@@ -270,11 +420,14 @@ async function resolveMirrorOutDir(config) {
 async function processCandidate(candidate, context) {
   const { outDir, manifest, full, now, results, seenPageIds } = context;
   const pageId = normalizeId(candidate.page.id || candidate.pageId);
+  const expectedRelativePath = candidate.relativePath || defaultPagePath(candidate.page);
+  assertRelativePath(expectedRelativePath);
   seenPageIds.add(pageId);
 
   const existing = manifest.pages?.[pageId];
-  if (!full && isUnchanged(existing, candidate.page, outDir)) {
+  if (!full && isUnchanged(existing, candidate.page, outDir, expectedRelativePath)) {
     const skippedEntry = updateSkippedEntry(existing, now);
+    skippedEntry.relativePath = expectedRelativePath;
     manifest.pages[pageId] = skippedEntry;
     results.skipped.push(skippedEntry);
     return;
@@ -284,7 +437,7 @@ async function processCandidate(candidate, context) {
     pageId,
     page: candidate.page,
     outDir: candidate.outDir,
-    relativePath: candidate.relativePath,
+    relativePath: expectedRelativePath,
     manifest,
     previousEntry: existing,
     lastSeenAt: now,
@@ -309,7 +462,10 @@ async function mirrorConfig(config, options = {}) {
     workspaceName: output.workspaceInfo?.workspaceName || '',
     workspaceId: output.workspaceInfo?.workspaceId || '',
     full: Boolean(options.full),
-    prune: options.prune !== false,
+    pruneMode: options.pruneMode || 'safe',
+    pruneAttempted: false,
+    pruneSkippedReason: '',
+    discoveryComplete: true,
     seen: 0,
     refreshed: 0,
     skipped: 0,
@@ -326,7 +482,8 @@ async function mirrorConfig(config, options = {}) {
     workspaceFolder: output.workspaceFolder,
     workspaceInfo: output.workspaceInfo,
     full: run.full,
-    prune: run.prune,
+    pruneMode: run.pruneMode,
+    discovery: [],
   };
   const seenPageIds = new Set();
   const context = {
@@ -340,10 +497,17 @@ async function mirrorConfig(config, options = {}) {
 
   if (shouldMirrorWorkspace(config)) {
     const workspace = config.workspace || {};
-    const pages = await searchWorkspacePages(workspace);
+    const workspaceResult = await searchWorkspacePages(workspace);
+    run.discoveryComplete = run.discoveryComplete && workspaceResult.complete;
+    results.discovery.push({
+      source: 'workspace',
+      complete: workspaceResult.complete,
+      limit: workspaceResult.limit,
+      count: workspaceResult.pages.length,
+    });
     const prefix = workspace.pathPrefix ? sanitizeRelativePathPrefix(workspace.pathPrefix) : '';
 
-    for (const page of pages) {
+    for (const page of workspaceResult.pages) {
       const title = titleFromPageResult(page);
       const relativePath = generatedMirrorPath(prefix, title, page.id);
       await processCandidate({
@@ -366,10 +530,19 @@ async function mirrorConfig(config, options = {}) {
 
   for (const database of config.databases || []) {
     if (!database.databaseId) throw new Error('Each databases[] entry requires databaseId');
-    const pages = await queryDatabasePages(database);
+    const databaseResult = await queryDatabasePages(database);
+    run.discoveryComplete = run.discoveryComplete && databaseResult.complete;
+    results.discovery.push({
+      source: 'database',
+      databaseId: normalizeId(database.databaseId),
+      dataSourceId: databaseResult.targetId,
+      complete: databaseResult.complete,
+      limit: databaseResult.limit,
+      count: databaseResult.pages.length,
+    });
     const prefix = database.pathPrefix ? sanitizeRelativePathPrefix(database.pathPrefix) : '';
 
-    for (const page of pages) {
+    for (const page of databaseResult.pages) {
       const title = titleFromPageResult(page);
       const relativePath = generatedMirrorPath(prefix, title, page.id);
       await processCandidate({
@@ -380,7 +553,8 @@ async function mirrorConfig(config, options = {}) {
     }
   }
 
-  if (run.prune) {
+  if (run.pruneMode !== 'off' && (run.discoveryComplete || run.pruneMode === 'force')) {
+    run.pruneAttempted = true;
     for (const [pageId, entry] of Object.entries(manifest.pages || {})) {
       if (seenPageIds.has(pageId)) continue;
       const pruned = safePruneFile(safeOutDir, entry);
@@ -393,6 +567,10 @@ async function mirrorConfig(config, options = {}) {
       });
       delete manifest.pages[pageId];
     }
+  } else if (run.pruneMode === 'off') {
+    run.pruneSkippedReason = 'disabled';
+  } else {
+    run.pruneSkippedReason = 'discovery incomplete; use --prune force to prune anyway';
   }
 
   run.completedAt = new Date().toISOString();
@@ -400,6 +578,7 @@ async function mirrorConfig(config, options = {}) {
   run.refreshed = results.refreshed.length;
   run.skipped = results.skipped.length;
   run.pruned = results.pruned.length;
+  run.prunedPages = results.pruned;
   manifest.lastRun = run;
   manifest.workspace = {
     folder: output.workspaceFolder,
@@ -416,10 +595,22 @@ async function mirrorConfig(config, options = {}) {
 }
 
 async function main() {
+  let options = null;
+  let config = null;
   try {
-    const options = parseArgs(process.argv.slice(2));
+    options = parseArgs(process.argv.slice(2));
     const { configPath } = options;
-    const config = readConfig(configPath);
+    config = readConfig(configPath);
+    if (options.report) {
+      const report = await syncReport(config, options);
+      if (hasJsonFlag()) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        console.log(formatSyncReport(report, report.manifestPath));
+      }
+      return;
+    }
+
     const results = await mirrorConfig(config, options);
 
     if (hasJsonFlag()) {
@@ -430,12 +621,21 @@ async function main() {
       log(`  Refreshed: ${results.run.refreshed}`);
       log(`  Skipped unchanged: ${results.run.skipped}`);
       log(`  Pruned stale: ${results.run.pruned}`);
+      if (results.run.pruneSkippedReason) log(`  Prune skipped: ${results.run.pruneSkippedReason}`);
+      if (!results.run.discoveryComplete) log('  Discovery: incomplete');
       if (results.full) log('  Mode: full reconciliation');
       for (const result of results.refreshed) log(`  - refreshed ${result.title}: ${result.path}`);
       for (const result of results.pruned) log(`  - pruned ${result.title || result.pageId}: ${result.path}`);
       log('Mode: read-only cache; edit Notion directly');
     }
   } catch (error) {
+    if (config && !options?.report) {
+      try {
+        await recordSyncFailure(config, options || {}, error);
+      } catch (_) {
+        // Preserve the original sync error for the caller.
+      }
+    }
     if (hasJsonFlag()) {
       console.log(JSON.stringify({ error: error.message }, null, 2));
     } else {

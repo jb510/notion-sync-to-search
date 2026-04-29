@@ -17,6 +17,7 @@ const {
   hasJsonFlag,
   log,
   resolveSafePath,
+  writeFileAtomic,
 } = require('./notion-utils.js');
 
 const DEFAULT_OUT_DIR = 'notion-sync-read-only';
@@ -131,8 +132,15 @@ function loadManifest(outDir) {
     }
     try {
       manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    } catch (_) {
+    } catch (error) {
+      const badPath = `${manifestPath}.bad-${Date.now()}`;
+      fs.renameSync(manifestPath, badPath);
       manifest = { generatedBy: 'notion-sync-to-search', pages: {} };
+      manifest.recoveredFromCorruptManifest = {
+        path: path.relative(process.cwd(), badPath),
+        error: error.message,
+        recoveredAt: new Date().toISOString(),
+      };
     }
   }
 
@@ -159,7 +167,7 @@ function writeRegularFile(filePath, body) {
   if (fs.existsSync(filePath) && fs.lstatSync(filePath).isSymbolicLink()) {
     throw new Error(`Refusing to write through symlink: ${filePath}`);
   }
-  fs.writeFileSync(filePath, body, 'utf8');
+  writeFileAtomic(filePath, body);
 }
 
 async function mirrorPage(options) {
@@ -197,6 +205,7 @@ async function mirrorPage(options) {
     lastSeenAt: options.lastSeenAt || mirroredAt,
     lastCheckedAt: options.lastCheckedAt || mirroredAt,
     syncStatus: 'refreshed',
+    relativePath,
     path: path.relative(process.cwd(), outputPath),
   };
 

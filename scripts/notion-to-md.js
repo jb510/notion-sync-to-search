@@ -16,6 +16,7 @@ const {
   hasJsonFlag,
   log,
   resolveSafePath,
+  writeFileAtomic,
 } = require('./notion-utils.js');
 
 /**
@@ -63,7 +64,7 @@ async function main() {
       if (fs.existsSync(safeOutputFile) && fs.lstatSync(safeOutputFile).isSymbolicLink()) {
         throw new Error(`Refusing to write through symlink: ${safeOutputFile}`);
       }
-      fs.writeFileSync(safeOutputFile, `# ${title}\n\n${markdown}`, 'utf8');
+      writeFileAtomic(safeOutputFile, `# ${title}\n\n${markdown}`);
       if (!hasJsonFlag()) {
         log(`✓ Saved to ${safeOutputFile}`);
       }
