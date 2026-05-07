@@ -70,9 +70,9 @@ function yamlString(value) {
   return JSON.stringify(String(value ?? ''));
 }
 
-function frontmatter(page, pageId, mirroredAt) {
+function frontmatter(page, pageId, mirroredAt, part = null) {
   const parent = page.parent || {};
-  return [
+  const lines = [
     '---',
     'source: notion',
     'mirror_mode: read_only',
@@ -84,9 +84,13 @@ function frontmatter(page, pageId, mirroredAt) {
     `notion_parent_type: ${yamlString(parent.type || '')}`,
     `notion_parent_id: ${yamlString(parent[parent.type] || '')}`,
     `mirrored_at: ${yamlString(mirroredAt)}`,
-    '---',
-    '',
-  ].join('\n');
+  ];
+  if (part) {
+    lines.push(`notion_mirror_part: ${part.partNumber}`);
+    lines.push(`notion_mirror_part_count: ${part.partCount}`);
+  }
+  lines.push('---', '');
+  return lines.join('\n');
 }
 
 function getTitle(page) {
@@ -175,24 +179,52 @@ function writeRegularFile(filePath, body) {
   writeFileAtomic(filePath, body);
 }
 
-function removeOldGeneratedFile(outDir, previousEntry, nextOutputPath) {
-  if (!previousEntry?.path) return null;
-
-  const oldPath = resolveSafePath(previousEntry.path, { mode: 'write' });
-  if (oldPath === nextOutputPath) return null;
-  if (!isInside(outDir, oldPath)) {
-    throw new Error(`Refusing to remove previous mirror file outside mirror folder: ${previousEntry.path}`);
+function entryOutputPaths(entry) {
+  const paths = [];
+  if (entry?.path) paths.push(entry.path);
+  for (const file of entry?.files || []) {
+    if (file?.path) paths.push(file.path);
   }
-  if (!fs.existsSync(oldPath)) return null;
+  return [...new Set(paths)];
+}
 
-  const stat = fs.lstatSync(oldPath);
-  if (stat.isSymbolicLink()) {
-    throw new Error(`Refusing to remove symlinked previous mirror file: ${previousEntry.path}`);
+function partRelativePath(relativePath, partNumber) {
+  if (partNumber === 1) return relativePath;
+  const parsed = path.parse(relativePath);
+  const suffix = `.part-${String(partNumber).padStart(3, '0')}`;
+  return path.join(parsed.dir, `${parsed.name}${suffix}${parsed.ext || '.md'}`);
+}
+
+function chunkBlocks(blocks, maxBlocksPerOutputFile) {
+  const chunkSize = Math.max(1, maxBlocksPerOutputFile || blocks.length || 1);
+  const chunks = [];
+  for (let index = 0; index < blocks.length; index += chunkSize) {
+    chunks.push(blocks.slice(index, index + chunkSize));
   }
-  if (!stat.isFile()) return null;
+  return chunks.length ? chunks : [[]];
+}
 
-  fs.unlinkSync(oldPath);
-  return path.relative(process.cwd(), oldPath);
+function removeOldGeneratedFiles(outDir, previousEntry, nextOutputPaths) {
+  const removed = [];
+  const next = new Set(nextOutputPaths);
+  for (const oldEntryPath of entryOutputPaths(previousEntry)) {
+    const oldPath = resolveSafePath(oldEntryPath, { mode: 'write' });
+    if (next.has(oldPath)) continue;
+    if (!isInside(outDir, oldPath)) {
+      throw new Error(`Refusing to remove previous mirror file outside mirror folder: ${oldEntryPath}`);
+    }
+    if (!fs.existsSync(oldPath)) continue;
+
+    const stat = fs.lstatSync(oldPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to remove symlinked previous mirror file: ${oldEntryPath}`);
+    }
+    if (!stat.isFile()) continue;
+
+    fs.unlinkSync(oldPath);
+    removed.push(path.relative(process.cwd(), oldPath));
+  }
+  return removed;
 }
 
 async function mirrorPage(options) {
@@ -225,10 +257,36 @@ async function mirrorPage(options) {
     throw new Error(`Markdown limit exceeded for ${pageId}; maxMarkdownBytesPerPage=${maxBytes}`);
   }
   const mirroredAt = new Date().toISOString();
-  const body = `${frontmatter(page, pageId, mirroredAt)}# ${title}\n\n${markdown.trim()}\n`;
+  const blockChunks = chunkBlocks(blocks, options.limits?.maxBlocksPerOutputFile);
+  const partCount = blockChunks.length;
+  const files = [];
+  const outputPaths = [];
 
-  writeRegularFile(outputPath, body);
-  const removedPreviousPath = removeOldGeneratedFile(outDir, options.previousEntry, outputPath);
+  for (let index = 0; index < blockChunks.length; index++) {
+    const partNumber = index + 1;
+    const chunkRelativePath = partRelativePath(relativePath, partNumber);
+    assertRelativePath(chunkRelativePath);
+    const chunkOutputPath = resolveSafePath(path.join(outDir, chunkRelativePath), { mode: 'write' });
+    if (!isInside(outDir, chunkOutputPath)) {
+      throw new Error(`Resolved output path escaped mirror folder: ${chunkRelativePath}`);
+    }
+    fs.mkdirSync(path.dirname(chunkOutputPath), { recursive: true });
+    const chunkMarkdown = blocksToMarkdown(blockChunks[index]).trim();
+    const part = partCount > 1 ? { partNumber, partCount } : null;
+    const heading = part ? `# ${title} (part ${partNumber} of ${partCount})` : `# ${title}`;
+    const body = `${frontmatter(page, pageId, mirroredAt, part)}${heading}\n\n${chunkMarkdown}\n`;
+    writeRegularFile(chunkOutputPath, body);
+    outputPaths.push(chunkOutputPath);
+    files.push({
+      partNumber,
+      partCount,
+      relativePath: chunkRelativePath,
+      path: path.relative(process.cwd(), chunkOutputPath),
+      blockCount: blockChunks[index].length,
+    });
+  }
+
+  const removedPreviousPaths = removeOldGeneratedFiles(outDir, options.previousEntry, outputPaths);
 
   const entry = {
     ...(options.previousEntry || {}),
@@ -241,10 +299,17 @@ async function mirrorPage(options) {
     lastCheckedAt: options.lastCheckedAt || mirroredAt,
     syncStatus: 'refreshed',
     relativePath,
-    path: path.relative(process.cwd(), outputPath),
+    path: files[0]?.path || path.relative(process.cwd(), outputPath),
+    files,
+    partCount,
+    blockCount: blocks.length,
   };
-  if (removedPreviousPath) {
-    entry.previousPath = removedPreviousPath;
+  delete entry.error;
+  delete entry.errorName;
+  delete entry.failedAt;
+  if (removedPreviousPaths.length) {
+    entry.previousPath = removedPreviousPaths[0];
+    entry.previousPaths = removedPreviousPaths;
     entry.previousPathRemovedAt = mirroredAt;
   }
 
@@ -292,5 +357,8 @@ if (require.main === module) {
     loadManifest,
     saveManifest,
     writeRegularFile,
+    entryOutputPaths,
+    partRelativePath,
+    chunkBlocks,
   };
 }

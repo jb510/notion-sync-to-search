@@ -241,12 +241,15 @@ Optional safety limits:
   "limits": {
     "maxPages": 5000,
     "maxBlocksPerPage": 20000,
+    "maxBlocksPerOutputFile": 500,
     "maxSecondsPerPage": 120,
     "maxMarkdownBytesPerPage": 5242880,
     "maxRunMinutes": 60
   }
 }
 ```
+
+`maxBlocksPerPage` is the total safety cap for one Notion page. `maxBlocksPerOutputFile` controls how many fetched Notion blocks are written to each generated markdown file. Large Notion pages are split into stable part files such as `Transcript - 3193f788.md`, `Transcript - 3193f788.part-002.md`, and `Transcript - 3193f788.part-003.md`; all parts keep the original Notion page URL in frontmatter and remain read-only cache.
 
 Optional search index freshness checks compare an index marker file mtime to the last completed mirror run:
 
@@ -287,7 +290,7 @@ The scripts are deliberately conservative with the Notion API:
 - HTTP 429 responses are retried using Notion's `Retry-After` header.
 - Search, data-source query, and block-children requests use paginated requests with `page_size` no higher than 100.
 - Request bodies are rejected locally if they exceed Notion's 500KB payload limit.
-- Individual pages are bounded by `maxBlocksPerPage`, `maxSecondsPerPage`, and `maxMarkdownBytesPerPage`; exceeded pages are recorded as page-level sync errors while the rest of the run continues.
+- Individual page fetches are bounded by `maxBlocksPerPage`, `maxSecondsPerPage`, and `maxMarkdownBytesPerPage`; exceeded pages are recorded as page-level sync errors while the rest of the run continues. Pages larger than `maxBlocksPerOutputFile` are split into multiple markdown files instead of failing just because they are long.
 - Child pages and child databases are kept as references in the parent page export. Their content is mirrored as separate pages when visible to the integration, so search hits are attributed to the page where the content actually lives instead of a higher-level index page.
 - Local page content is not sent back to Notion; this skill only reads from Notion and writes local markdown cache.
 

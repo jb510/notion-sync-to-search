@@ -6,6 +6,7 @@ const { execFileSync } = require('node:child_process');
 const test = require('node:test');
 const { blocksToMarkdown, getAllBlocks, getApiKey, shouldFetchBlockChildren, _resetTokenCache } = require('../scripts/notion-utils.js');
 const { _internal } = require('../scripts/mirror-config.js');
+const { chunkBlocks, partRelativePath } = require('../scripts/mirror-page.js');
 const { _internal: openclawInternal } = require('../scripts/install-openclaw-memory.js');
 
 const repo = path.resolve(__dirname, '..');
@@ -152,6 +153,32 @@ test('manifest entry cache hit requires regular file', () => {
   assert.equal(_internal.manifestEntryFileExists(dir, { path: directoryPath }), false);
 });
 
+test('manifest entry cache hit requires every generated part', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const partOne = path.join(dir, 'page.md');
+  const partTwo = path.join(dir, 'page.part-002.md');
+  fs.writeFileSync(partOne, 'part one');
+  fs.writeFileSync(partTwo, 'part two');
+
+  assert.equal(_internal.manifestEntryFileExists(dir, {
+    path: partOne,
+    files: [
+      { path: partOne, partNumber: 1 },
+      { path: partTwo, partNumber: 2 },
+    ],
+  }), true);
+
+  fs.unlinkSync(partTwo);
+  assert.equal(_internal.manifestEntryFileExists(dir, {
+    path: partOne,
+    files: [
+      { path: partOne, partNumber: 1 },
+      { path: partTwo, partNumber: 2 },
+    ],
+  }), false);
+});
+
 test('page sync errors are recorded as page-level entries', () => {
   const page = {
     id: '3193f788-993c-81f3-a066-ccb43c832b89',
@@ -211,6 +238,23 @@ test('child pages remain references instead of recursive inline content by defau
   assert.match(markdown, /Notion child page: 349bb4fe-9887-8149-827f-dc0f3c7a4f6e/);
   assert.match(markdown, /## Research Database/);
   assert.match(markdown, /Notion child database: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/);
+});
+
+test('large pages are split into stable markdown part paths', () => {
+  const blocks = Array.from({ length: 5 }, (_, index) => ({ id: String(index + 1) }));
+  assert.deepEqual(chunkBlocks(blocks, 2).map(chunk => chunk.map(block => block.id)), [
+    ['1', '2'],
+    ['3', '4'],
+    ['5'],
+  ]);
+  assert.equal(partRelativePath('Folder/Huge Page - 3193f788.md', 1), 'Folder/Huge Page - 3193f788.md');
+  assert.equal(partRelativePath('Folder/Huge Page - 3193f788.md', 2), 'Folder/Huge Page - 3193f788.part-002.md');
+});
+
+test('legacy 500 block limit becomes chunk size, not total page cap', () => {
+  const limits = _internal.parseLimits({ limits: { maxBlocksPerPage: 500 } });
+  assert.equal(limits.maxBlocksPerPage, 20000);
+  assert.equal(limits.maxBlocksPerOutputFile, 500);
 });
 
 test('openclaw memory helper links agent workspaces to one mirror', () => {

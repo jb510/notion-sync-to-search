@@ -132,9 +132,22 @@ function parseRetentionRuns(config) {
 
 function parseLimits(config) {
   const limits = config.limits || {};
+  const configuredMaxBlocksPerPage = Number.parseInt(limits.maxBlocksPerPage, 10);
   return {
     maxPages: parseLimit(limits.maxPages, 5000, 100000),
-    maxBlocksPerPage: parseLimit(limits.maxBlocksPerPage, 20000, 1000000),
+    maxBlocksPerPage: parseLimit(
+      limits.maxTotalBlocksPerPage
+        ?? (configuredMaxBlocksPerPage > 1000 ? limits.maxBlocksPerPage : 20000),
+      20000,
+      1000000,
+    ),
+    maxBlocksPerOutputFile: parseLimit(
+      limits.maxBlocksPerOutputFile
+        ?? limits.maxBlocksPerMirrorFile
+        ?? (configuredMaxBlocksPerPage > 0 && configuredMaxBlocksPerPage <= 1000 ? limits.maxBlocksPerPage : 500),
+      500,
+      100000,
+    ),
     maxSecondsPerPage: parseLimit(limits.maxSecondsPerPage, 120, 60 * 60),
     maxMarkdownBytesPerPage: parseLimit(limits.maxMarkdownBytesPerPage, 5 * 1024 * 1024, 100 * 1024 * 1024),
     maxRunMinutes: parseLimit(limits.maxRunMinutes, 60, 24 * 60),
@@ -242,11 +255,18 @@ function shouldMirrorWorkspace(config) {
 }
 
 function manifestEntryFileExists(outDir, entry) {
-  if (!entry?.path) return false;
-  const filePath = resolveSafePath(entry.path, { mode: 'write' });
-  if (!isInside(outDir, filePath) || !fs.existsSync(filePath)) return false;
-  const stat = fs.lstatSync(filePath);
-  return stat.isFile() && !stat.isSymbolicLink();
+  const paths = [];
+  if (entry?.path) paths.push(entry.path);
+  for (const file of entry?.files || []) {
+    if (file?.path) paths.push(file.path);
+  }
+  if (!paths.length) return false;
+  return [...new Set(paths)].every(entryPath => {
+    const filePath = resolveSafePath(entryPath, { mode: 'write' });
+    if (!isInside(outDir, filePath) || !fs.existsSync(filePath)) return false;
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink();
+  });
 }
 
 function entryMatchesExpectedPath(outDir, existingEntry, expectedRelativePath) {
@@ -291,19 +311,29 @@ function pageErrorEntry(candidate, pageId, relativePath, error, now) {
 }
 
 function safePruneFile(outDir, entry) {
-  if (!entry?.path) return { deleted: false, path: null };
-  const filePath = resolveSafePath(entry.path, { mode: 'write' });
-  if (!isInside(outDir, filePath)) {
-    throw new Error(`Refusing to prune file outside mirror folder: ${entry.path}`);
+  const paths = [];
+  if (entry?.path) paths.push(entry.path);
+  for (const file of entry?.files || []) {
+    if (file?.path) paths.push(file.path);
   }
-  if (!fs.existsSync(filePath)) return { deleted: false, path: entry.path };
-  const stat = fs.lstatSync(filePath);
-  if (stat.isSymbolicLink()) {
-    throw new Error(`Refusing to prune symlinked mirror file: ${entry.path}`);
+  if (!paths.length) return { deleted: false, path: null, deletedFiles: [] };
+
+  const deletedFiles = [];
+  for (const entryPath of [...new Set(paths)]) {
+    const filePath = resolveSafePath(entryPath, { mode: 'write' });
+    if (!isInside(outDir, filePath)) {
+      throw new Error(`Refusing to prune file outside mirror folder: ${entryPath}`);
+    }
+    if (!fs.existsSync(filePath)) continue;
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to prune symlinked mirror file: ${entryPath}`);
+    }
+    if (!stat.isFile()) continue;
+    fs.unlinkSync(filePath);
+    deletedFiles.push(entryPath);
   }
-  if (!stat.isFile()) return { deleted: false, path: entry.path };
-  fs.unlinkSync(filePath);
-  return { deleted: true, path: entry.path };
+  return { deleted: deletedFiles.length > 0, path: entry.path || paths[0], deletedFiles };
 }
 
 function pushRunHistory(manifest, run, retentionRuns = 250) {
@@ -1083,6 +1113,7 @@ if (require.main === module) {
     _internal: {
       defaultPagePath,
       manifestEntryFileExists,
+      parseLimits,
       pageErrorEntry,
       withWorkspaceToken,
       workspaceConfigs,
