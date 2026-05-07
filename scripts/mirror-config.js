@@ -288,12 +288,16 @@ function isUnchanged(existingEntry, page, outDir, expectedRelativePath) {
 }
 
 function updateSkippedEntry(existingEntry, now) {
-  return {
+  const entry = {
     ...existingEntry,
     lastSeenAt: now,
     lastCheckedAt: now,
     syncStatus: 'skipped_unchanged',
   };
+  delete entry.error;
+  delete entry.errorName;
+  delete entry.failedAt;
+  return entry;
 }
 
 function pageErrorEntry(candidate, pageId, relativePath, error, now) {
@@ -1115,6 +1119,7 @@ if (require.main === module) {
       manifestEntryFileExists,
       parseLimits,
       pageErrorEntry,
+      updateSkippedEntry,
       withWorkspaceToken,
       workspaceConfigs,
     },

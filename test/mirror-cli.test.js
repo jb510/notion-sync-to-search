@@ -200,6 +200,21 @@ test('page sync errors are recorded as page-level entries', () => {
   assert.match(entry.error, /Block limit exceeded/);
 });
 
+test('skipped unchanged entries clear stale error metadata', () => {
+  const entry = _internal.updateSkippedEntry({
+    pageId: '3193f788-993c-81f3-a066-ccb43c832b89',
+    syncStatus: 'error',
+    error: 'Block limit exceeded',
+    errorName: 'Error',
+    failedAt: '2026-04-29T15:00:00.000Z',
+  }, '2026-05-07T22:00:00.000Z');
+
+  assert.equal(entry.syncStatus, 'skipped_unchanged');
+  assert.equal(entry.error, undefined);
+  assert.equal(entry.errorName, undefined);
+  assert.equal(entry.failedAt, undefined);
+});
+
 test('block limit of zero does not reset to unbounded recursion', async () => {
   await assert.rejects(
     () => getAllBlocks('3193f788-993c-81f3-a066-ccb43c832b89', { maxBlocks: 0 }),
