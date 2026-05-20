@@ -28,7 +28,7 @@ const {
 } = require('./mirror-page.js');
 
 function usage(exitCode = 0) {
-  console.log('Usage: mirror-config.js <config.json> [--full] [--dry-run] [--status] [--doctor] [--prune safe|force|off] [--report] [--lock-file <path>] [--no-lock] [--json]');
+  console.log('Usage: mirror-config.js <config.json> [--full] [--dry-run] [--status] [--doctor] [--prune safe|force|off] [--report] [--env-file <path>] [--lock-file <path>] [--no-lock] [--verbose] [--json]');
   console.log('');
   console.log('Options:');
   console.log('  --full      Refetch and rewrite every discovered page, even if last_edited_time is unchanged');
@@ -40,8 +40,10 @@ function usage(exitCode = 0) {
   console.log('  --dry-run   Discover changes and pruning candidates without writing/deleting');
   console.log('  --days      Report lookback window in days (default: 7)');
   console.log('  --workspace-folder <name|none>  Select local workspace folder for reports/failure recording');
+  console.log('  --env-file <path>  Load Notion tokens from an install .env file without shell-sourcing it');
   console.log('  --lock-file <path>  Override sync lock file path (default: <outDir>/.notion-sync-to-search.lock)');
   console.log('  --no-lock   Disable sync lock protection for this run');
+  console.log('  --verbose   Include per-page refreshed/pruned details in normal text output');
   console.log('');
   console.log('Config shape:');
   console.log(JSON.stringify({
@@ -60,7 +62,7 @@ function parseArgs(argv) {
   const args = stripTokenArg(argv);
   if (args.length < 1 || args[0] === '--help' || args[0] === '-h') usage(args[0] ? 0 : 1);
 
-  const options = { configPath: args[0], full: false, dryRun: false, status: false, doctor: false, pruneMode: 'safe', report: false, reportDays: 7, workspaceFolder: null, lock: true, lockFile: null };
+  const options = { configPath: args[0], full: false, dryRun: false, status: false, doctor: false, pruneMode: 'safe', report: false, reportDays: 7, workspaceFolder: null, envFile: null, lock: true, lockFile: null, verbose: false };
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--full' || args[i] === '--force') {
       options.full = true;
@@ -78,10 +80,14 @@ function parseArgs(argv) {
       options.reportDays = parseLimit(args[++i], 7, 365);
     } else if (args[i] === '--workspace-folder' && args[i + 1]) {
       options.workspaceFolder = args[++i];
+    } else if (args[i] === '--env-file' && args[i + 1]) {
+      options.envFile = args[++i];
     } else if (args[i] === '--lock-file' && args[i + 1]) {
       options.lockFile = args[++i];
     } else if (args[i] === '--no-lock') {
       options.lock = false;
+    } else if (args[i] === '--verbose') {
+      options.verbose = true;
     } else if (args[i] === '--no-prune') {
       options.pruneMode = 'off';
     } else {
@@ -99,6 +105,81 @@ function parsePruneMode(value) {
 function readConfig(configPath) {
   const safePath = resolveSafePath(configPath, { mode: 'read' });
   return JSON.parse(fs.readFileSync(safePath, 'utf8'));
+}
+
+function parseEnvContent(content) {
+  const parsed = {};
+  for (const rawLine of String(content || '').split(/\r?\n/)) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.startsWith('export ')) line = line.slice('export '.length).trim();
+    const equalsIndex = line.indexOf('=');
+    if (equalsIndex === -1) continue;
+    const key = line.slice(0, equalsIndex).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let value = line.slice(equalsIndex + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      const quote = value[0];
+      value = value.slice(1, -1);
+      if (quote === '"') {
+        value = value
+          .replace(/\\n/g, '\n')
+          .replace(/\\r/g, '\r')
+          .replace(/\\t/g, '\t')
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\');
+      }
+    } else {
+      value = value.replace(/\s+#.*$/, '').trim();
+    }
+    parsed[key] = value;
+  }
+  return parsed;
+}
+
+function loadEnvFile(envFile) {
+  const safePath = fs.existsSync(envFile) ? resolveSafePath(envFile, { mode: 'read' }) : path.resolve(envFile);
+  if (!fs.existsSync(safePath)) {
+    resetTokenCache();
+    return { path: safePath, loaded: [], skipped: [], missing: true };
+  }
+  const parsed = parseEnvContent(fs.readFileSync(safePath, 'utf8'));
+  const loaded = [];
+  const skipped = [];
+  for (const [key, value] of Object.entries(parsed)) {
+    if (process.env[key] === undefined || process.env[key] === '') {
+      process.env[key] = value;
+      loaded.push(key);
+    } else {
+      skipped.push(key);
+    }
+  }
+  resetTokenCache();
+  return { path: safePath, loaded, skipped };
+}
+
+function logSyncResults(results, options = {}) {
+  log(`Notion mirror sync complete${results.outDir ? ` into ${results.outDir}` : ''}`);
+  log(`  Seen: ${results.run.seen}`);
+  log(`  Refreshed: ${results.run.refreshed}`);
+  log(`  Skipped unchanged: ${results.run.skipped}`);
+  log(`  Pruned stale: ${results.run.pruned}`);
+  if (results.run.pruneSkippedReason) log(`  Prune skipped: ${results.run.pruneSkippedReason}`);
+  if (results.run.discoveryComplete === false) log('  Discovery: incomplete');
+  if (results.run.errors > 0) log(`  Errors: ${results.run.errors}`);
+  if (results.full) log('  Mode: full reconciliation');
+
+  if (options.verbose) {
+    for (const result of results.refreshed || []) log(`  - refreshed ${result.title}: ${result.path || result.relativePath || ''}`);
+    for (const result of results.errors || []) log(`  - error ${result.title || result.pageId}: ${result.error}`);
+    for (const result of results.pruned || []) log(`  - ${result.dryRun ? 'would prune' : 'pruned'} ${result.title || result.pageId}: ${result.path}`);
+  } else if ((results.errors || []).length > 0) {
+    const shown = results.errors.slice(0, 5);
+    for (const result of shown) log(`  - error ${result.title || result.pageId}: ${result.error}`);
+    if (results.errors.length > shown.length) log(`  - ${results.errors.length - shown.length} more error(s); rerun with --verbose for full details`);
+  }
+
+  log('Mode: read-only cache; edit Notion directly');
 }
 
 function sanitizePathSegment(value) {
@@ -1114,6 +1195,7 @@ async function main() {
   try {
     options = parseArgs(process.argv.slice(2));
     const { configPath } = options;
+    if (options.envFile) loadEnvFile(options.envFile);
     config = readConfig(configPath);
     if (options.report) {
       const report = await syncReport(config, options);
@@ -1162,19 +1244,7 @@ async function main() {
     if (hasJsonFlag()) {
       console.log(JSON.stringify(results, null, 2));
     } else {
-      log(`Notion mirror sync complete${results.outDir ? ` into ${results.outDir}` : ''}`);
-      log(`  Seen: ${results.run.seen}`);
-      log(`  Refreshed: ${results.run.refreshed}`);
-      log(`  Skipped unchanged: ${results.run.skipped}`);
-      log(`  Pruned stale: ${results.run.pruned}`);
-      if (results.run.pruneSkippedReason) log(`  Prune skipped: ${results.run.pruneSkippedReason}`);
-      if (results.run.discoveryComplete === false) log('  Discovery: incomplete');
-      if (results.run.errors > 0) log(`  Errors: ${results.run.errors}`);
-      if (results.full) log('  Mode: full reconciliation');
-      for (const result of results.refreshed || []) log(`  - refreshed ${result.title}: ${result.path || result.relativePath || ''}`);
-      for (const result of results.errors || []) log(`  - error ${result.title || result.pageId}: ${result.error}`);
-      for (const result of results.pruned || []) log(`  - ${result.dryRun ? 'would prune' : 'pruned'} ${result.title || result.pageId}: ${result.path}`);
-      log('Mode: read-only cache; edit Notion directly');
+      logSyncResults(results, options);
     }
   } catch (error) {
     if (config && !options?.report && !error.skipFailureRecord) {
@@ -1205,6 +1275,9 @@ if (require.main === module) {
       parseLimits,
       pageErrorEntry,
       updateSkippedEntry,
+      parseEnvContent,
+      loadEnvFile,
+      logSyncResults,
       withWorkspaceToken,
       acquireSyncLock,
       syncLockPath,

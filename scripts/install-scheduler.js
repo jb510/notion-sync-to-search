@@ -2,8 +2,8 @@
 /**
  * Print or install host scheduler entries for recurring Notion mirror refresh.
  *
- * This script does not store NOTION_API_KEY. Point schedulers at an install
- * state .env file or configure the token in the scheduler runtime environment.
+ * This script does not store NOTION_API_KEY. It passes the install state .env
+ * file to mirror-config.js, which parses it without shell-sourcing.
  */
 
 const fs = require('fs');
@@ -128,9 +128,10 @@ function buildContext(options) {
   const logDir = options.logDir ? path.resolve(expandHome(options.logDir)) : path.join(workdir, 'logs');
   const logPath = path.join(logDir, options.report ? 'notion-sync-to-search-report.log' : 'notion-sync-to-search.log');
   const envFile = options.envFile ? path.resolve(expandHome(options.envFile)) : (stateDir ? path.join(stateDir, '.env') : null);
-  const commandArgs = options.report
+  const baseCommandArgs = options.report
     ? [scriptPath, configPath, '--report', '--days', String(options.reportDays)]
     : [scriptPath, configPath];
+  const commandArgs = envFile ? [...baseCommandArgs, '--env-file', envFile] : baseCommandArgs;
 
   return {
     ...options,
@@ -149,8 +150,7 @@ function buildContext(options) {
 }
 
 function commandString(ctx) {
-  const envPrefix = ctx.envFile ? `set -a; [ -f ${shellQuote(ctx.envFile)} ] && . ${shellQuote(ctx.envFile)}; set +a; ` : '';
-  return `${envPrefix}mkdir -p ${shellQuote(path.dirname(ctx.logPath))}; cd ${shellQuote(ctx.workdir)} && ${shellQuote(ctx.nodePath)} ${ctx.commandArgs.map(shellQuote).join(' ')} >> ${shellQuote(ctx.logPath)} 2>&1`;
+  return `mkdir -p ${shellQuote(path.dirname(ctx.logPath))}; cd ${shellQuote(ctx.workdir)} && ${shellQuote(ctx.nodePath)} ${ctx.commandArgs.map(shellQuote).join(' ')} >> ${shellQuote(ctx.logPath)} 2>&1`;
 }
 
 function buildLaunchd(ctx) {
@@ -197,7 +197,6 @@ function buildSystemd(ctx) {
   const unitDir = ctx.systemdScope === 'system' ? '/etc/systemd/system' : path.join(os.homedir(), '.config', 'systemd', 'user');
   const servicePath = path.join(unitDir, `${ctx.name}.service`);
   const timerPath = path.join(unitDir, `${ctx.name}.timer`);
-  const envLine = ctx.envFile ? `EnvironmentFile=-${ctx.envFile}\n` : '';
   const execArgs = ctx.commandArgs.map(arg => arg.includes(' ') ? shellQuote(arg) : arg).join(' ');
 
   return {
@@ -211,7 +210,7 @@ Description=Refresh Notion search mirror
 [Service]
 Type=oneshot
 WorkingDirectory=${ctx.workdir}
-${envLine}ExecStartPre=/bin/mkdir -p ${path.dirname(ctx.logPath)}
+ExecStartPre=/bin/mkdir -p ${path.dirname(ctx.logPath)}
 ExecStart=${ctx.nodePath} ${execArgs}
 StandardOutput=append:${ctx.logPath}
 StandardError=append:${ctx.logPath}

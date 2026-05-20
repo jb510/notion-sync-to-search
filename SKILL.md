@@ -85,7 +85,13 @@ If that metadata is missing, do not assume a local markdown file can be safely m
 
 ## Setup
 
-Provide a Notion integration token in the environment:
+Provide a Notion integration token in the install-level `.env` file when this is running under OpenClaw:
+
+```bash
+NOTION_API_KEY="ntn_..."
+```
+
+For one-off local commands, exporting the token is also supported:
 
 ```bash
 export NOTION_API_KEY="ntn_..."
@@ -236,7 +242,7 @@ Scheduled refresh is the expected steady-state workflow. Use the scheduler helpe
 node {baseDir}/scripts/install-scheduler.js --state-dir /absolute/path/to/openclaw-state
 ```
 
-By default it reads `sync.intervalMinutes` from `<state>/config/notion-search-mirror.json`, then prints launchd/systemd files and activation commands for the host. Use `--mode install` only when the user wants the helper to write scheduler files. The scheduler helper does not store `NOTION_API_KEY`; it loads the install-level `<state>/.env` when configured by the generated scheduler.
+By default it reads `sync.intervalMinutes` from `<state>/config/notion-search-mirror.json`, then prints launchd/systemd files and activation commands for the host. Use `--mode install` only when the user wants the helper to write scheduler files. The scheduler helper does not store `NOTION_API_KEY`; it passes the install-level `<state>/.env` to `mirror-config.js --env-file`. The sync script parses `.env` itself and does not shell-source it.
 
 On Linux OpenClaw containers, prefer a system-level systemd timer:
 
@@ -303,7 +309,10 @@ Manual refresh is for debugging or immediate catch-up:
 ```bash
 node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json
 node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json --dry-run
+node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json --env-file /absolute/path/to/openclaw-state/.env
 ```
+
+Normal sync output is intentionally compact: it prints counts and warnings, not every refreshed page. Use `--verbose` only when debugging a specific run and per-page details are needed.
 
 That command performs an incremental sync:
 

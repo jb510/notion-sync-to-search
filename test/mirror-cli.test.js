@@ -125,6 +125,58 @@ test('workspace token swap resets cached Notion token', async () => {
   assert.equal(getApiKey(), 'global-token');
 });
 
+test('env file parser handles dotenv values without shell evaluation', () => {
+  const parsed = _internal.parseEnvContent(`
+# comment
+export NOTION_API_KEY=ntn_test
+OPENCLAW_WINDOWS_TASK_NAME=OpenClaw Gateway
+QUOTED="line\\nvalue"
+SINGLE='literal value'
+INLINE=value # comment
+`);
+
+  assert.equal(parsed.NOTION_API_KEY, 'ntn_test');
+  assert.equal(parsed.OPENCLAW_WINDOWS_TASK_NAME, 'OpenClaw Gateway');
+  assert.equal(parsed.QUOTED, 'line\nvalue');
+  assert.equal(parsed.SINGLE, 'literal value');
+  assert.equal(parsed.INLINE, 'value');
+});
+
+test('env file loader fills missing env vars without overriding explicit environment', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const envPath = path.join(dir, '.env');
+  fs.writeFileSync(envPath, 'NOTION_API_KEY=from_file\nNOTION_API_KEY_ALT=alt_from_file\n');
+
+  const previousKey = process.env.NOTION_API_KEY;
+  const previousAlt = process.env.NOTION_API_KEY_ALT;
+  test.after(() => {
+    if (previousKey === undefined) delete process.env.NOTION_API_KEY;
+    else process.env.NOTION_API_KEY = previousKey;
+    if (previousAlt === undefined) delete process.env.NOTION_API_KEY_ALT;
+    else process.env.NOTION_API_KEY_ALT = previousAlt;
+  });
+
+  process.env.NOTION_API_KEY = 'explicit';
+  delete process.env.NOTION_API_KEY_ALT;
+  const result = _internal.loadEnvFile(envPath);
+
+  assert.deepEqual(result.loaded, ['NOTION_API_KEY_ALT']);
+  assert.deepEqual(result.skipped, ['NOTION_API_KEY']);
+  assert.equal(process.env.NOTION_API_KEY, 'explicit');
+  assert.equal(process.env.NOTION_API_KEY_ALT, 'alt_from_file');
+});
+
+test('env file loader tolerates missing env file', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const result = _internal.loadEnvFile(path.join(dir, '.env'));
+
+  assert.equal(result.missing, true);
+  assert.deepEqual(result.loaded, []);
+  assert.deepEqual(result.skipped, []);
+});
+
 test('single workspace config preserves tokenEnv', () => {
   const workspaces = _internal.workspaceConfigs({
     name: 'Work',
@@ -423,13 +475,48 @@ test('scheduler helper can generate state-level install plan', () => {
   assert.match(plan.content, /notion-search-mirror\.json/);
   assert.match(plan.content, /notion-sync-to-search\.log/);
   assert.match(plan.content, /state/);
+  assert.match(plan.content, /--env-file/);
+  assert.match(plan.content, /\.env/);
+  assert.doesNotMatch(plan.content, /set -a/);
   if (process.platform === 'darwin') {
     assert.equal(plan.path, path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.openclaw.notion-sync-to-search.plist'));
     assert.match(plan.content, /StartInterval/);
     assert.match(plan.content, /2220/);
   } else {
     assert.equal(plan.path, path.join(os.homedir(), '.config', 'systemd', 'user', 'notion-sync-to-search.service'));
-    assert.match(plan.content, /EnvironmentFile=-/);
+    assert.doesNotMatch(plan.content, /EnvironmentFile=-/);
     assert.match(plan.content, /WorkingDirectory=/);
   }
+});
+
+test('normal sync result output omits per-page refreshed noise unless verbose', () => {
+  const lines = [];
+  const originalLog = console.log;
+  test.after(() => { console.log = originalLog; });
+  console.log = line => lines.push(String(line));
+
+  const results = {
+    outDir: '/tmp/mirror',
+    full: true,
+    run: {
+      seen: 10,
+      refreshed: 8,
+      skipped: 2,
+      pruned: 1,
+      errors: 0,
+    },
+    refreshed: Array.from({ length: 8 }, (_, index) => ({ title: `Page ${index}`, path: `Page ${index}.md` })),
+    errors: [],
+    pruned: [{ title: 'Old Page', path: 'Old Page.md' }],
+  };
+
+  _internal.logSyncResults(results, { verbose: false });
+  assert.match(lines.join('\n'), /Refreshed: 8/);
+  assert.doesNotMatch(lines.join('\n'), /- refreshed Page/);
+  assert.doesNotMatch(lines.join('\n'), /- pruned Old Page/);
+
+  lines.length = 0;
+  _internal.logSyncResults(results, { verbose: true });
+  assert.match(lines.join('\n'), /- refreshed Page 0/);
+  assert.match(lines.join('\n'), /- pruned Old Page/);
 });
