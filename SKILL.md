@@ -22,7 +22,17 @@ This skill exists because Notion is good as a canonical workspace, but local Ope
 5. **When a search hit comes from the mirror, use its frontmatter to identify the live Notion page and edit Notion directly.**
 6. **Keep scheduled refresh enabled so local search catches up after Notion edits.**
 
-The standard mirror folder is:
+The preferred OpenClaw install layout is one shared managed skill and one shared mirror per OpenClaw state directory:
+
+```text
+<state>/skills/notion-sync-to-search/
+<state>/config/notion-search-mirror.json
+<state>/notion-sync-read-only/<Notion workspace name>/
+```
+
+For a default single-user OpenClaw install, `<state>` is usually `~/.openclaw`. For multi-install hosts, use that install's actual state directory.
+
+The standard mirror folder inside the state directory is:
 
 ```text
 notion-sync-read-only/<Notion workspace name>/
@@ -112,13 +122,13 @@ node {baseDir}/scripts/mirror-page.js <page-id> --path "05 Research Library/Topi
 
 The custom path is still placed under `notion-sync-read-only/` unless `--out-dir` is changed.
 
-## Configure The Workspace Mirror
+## Configure The Install Mirror
 
-Create `config/notion-search-mirror.json`. The default knowledge-base shape mirrors the integration-visible workspace:
+Create `<state>/config/notion-search-mirror.json`. The default knowledge-base shape mirrors the integration-visible workspace:
 
 ```json
 {
-  "outDir": "notion-sync-read-only",
+  "outDir": "/absolute/path/to/openclaw-state/notion-sync-read-only",
   "workspaceFolder": "auto",
   "sync": {
     "intervalMinutes": 60
@@ -140,7 +150,7 @@ Create `config/notion-search-mirror.json`. The default knowledge-base shape mirr
 Then run:
 
 ```bash
-node {baseDir}/scripts/mirror-config.js config/notion-search-mirror.json
+node {baseDir}/scripts/mirror-config.js /absolute/path/to/openclaw-state/config/notion-search-mirror.json
 ```
 
 Users do not have to hand-edit this file if they ask OpenClaw to configure the skill. For example:
@@ -155,7 +165,7 @@ or:
 Add my Postgres runbook page and PRDs database to the Notion mirror config.
 ```
 
-When handling those requests, create or update `config/notion-search-mirror.json` in the user's OpenClaw workspace.
+When handling those requests, create or update `config/notion-search-mirror.json` in the OpenClaw state directory, not separately in every agent workspace.
 
 Use workspace mirroring carefully. It mirrors only pages the integration can see. It does not bypass Notion sharing or permissions.
 
@@ -223,10 +233,41 @@ That avoids overwriting unrelated Notion pages with the same title and keeps sea
 Scheduled refresh is the expected steady-state workflow. Use the scheduler helper after creating the config:
 
 ```bash
-node {baseDir}/scripts/install-scheduler.js --config config/notion-search-mirror.json
+node {baseDir}/scripts/install-scheduler.js --state-dir /absolute/path/to/openclaw-state
 ```
 
-By default it reads `sync.intervalMinutes` from the config, then prints launchd/systemd/cron files and activation commands for the host. Use `--mode install` only when the user wants the helper to write scheduler files. The scheduler helper does not store `NOTION_API_KEY`; configure that secret in the scheduler runtime environment.
+By default it reads `sync.intervalMinutes` from `<state>/config/notion-search-mirror.json`, then prints launchd/systemd files and activation commands for the host. Use `--mode install` only when the user wants the helper to write scheduler files. The scheduler helper does not store `NOTION_API_KEY`; it loads the install-level `<state>/.env` when configured by the generated scheduler.
+
+On Linux OpenClaw containers, prefer a system-level systemd timer:
+
+```bash
+node /root/.openclaw/skills/notion-sync-to-search/scripts/install-scheduler.js \
+  --state-dir /root/.openclaw \
+  --name notion-sync-to-search \
+  --systemd-scope system \
+  --mode install
+```
+
+On macOS OpenClaw installs, use the same helper from the install's own state directory; it generates a per-user launchd agent:
+
+```bash
+node /Users/walden/OpenClaw/anastasia/state/skills/notion-sync-to-search/scripts/install-scheduler.js \
+  --state-dir /Users/walden/OpenClaw/anastasia/state \
+  --name notion-sync-to-search-anastasia \
+  --mode install
+```
+
+Each sync run uses a lock file under the mirror output directory by default, so overlapping scheduled runs fail fast instead of corrupting the mirror or piling up work. Configure `sync.lockFile` or `sync.lockStaleMinutes` only if the default is wrong for the host.
+
+When wiring OpenClaw memory/search during migration, prefer:
+
+```bash
+node <state>/skills/notion-sync-to-search/scripts/install-openclaw-memory.js \
+  --state-dir <state> \
+  --replace-notion-paths
+```
+
+That sets `agents.defaults.memorySearch.extraPaths` to the install-level mirror and removes stale per-workspace Notion mirror paths while preserving unrelated search paths.
 
 Users can control sync frequency in config:
 

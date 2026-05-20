@@ -179,11 +179,18 @@ function writeRegularFile(filePath, body) {
   writeFileAtomic(filePath, body);
 }
 
-function entryOutputPaths(entry) {
+function entryOutputPaths(entry, outDir = null) {
   const paths = [];
-  if (entry?.path) paths.push(entry.path);
-  for (const file of entry?.files || []) {
-    if (file?.path) paths.push(file.path);
+  const files = Array.isArray(entry?.files) ? entry.files : [];
+  if (files.length > 0) {
+    for (const file of files) {
+      if (outDir && file?.relativePath) paths.push(path.join(outDir, file.relativePath));
+      else if (file?.path) paths.push(file.path);
+    }
+  } else if (outDir && entry?.relativePath) {
+    paths.push(path.join(outDir, entry.relativePath));
+  } else if (entry?.path) {
+    paths.push(entry.path);
   }
   return [...new Set(paths)];
 }
@@ -205,13 +212,14 @@ function chunkBlocks(blocks, maxBlocksPerOutputFile) {
 }
 
 function removeOldGeneratedFiles(outDir, previousEntry, nextOutputPaths) {
-  const removed = [];
+  const result = { removed: [], skippedOutside: [] };
   const next = new Set(nextOutputPaths);
-  for (const oldEntryPath of entryOutputPaths(previousEntry)) {
+  for (const oldEntryPath of entryOutputPaths(previousEntry, outDir)) {
     const oldPath = resolveSafePath(oldEntryPath, { mode: 'write' });
     if (next.has(oldPath)) continue;
     if (!isInside(outDir, oldPath)) {
-      throw new Error(`Refusing to remove previous mirror file outside mirror folder: ${oldEntryPath}`);
+      result.skippedOutside.push(oldEntryPath);
+      continue;
     }
     if (!fs.existsSync(oldPath)) continue;
 
@@ -222,9 +230,9 @@ function removeOldGeneratedFiles(outDir, previousEntry, nextOutputPaths) {
     if (!stat.isFile()) continue;
 
     fs.unlinkSync(oldPath);
-    removed.push(path.relative(process.cwd(), oldPath));
+    result.removed.push(path.relative(process.cwd(), oldPath));
   }
-  return removed;
+  return result;
 }
 
 async function mirrorPage(options) {
@@ -286,7 +294,7 @@ async function mirrorPage(options) {
     });
   }
 
-  const removedPreviousPaths = removeOldGeneratedFiles(outDir, options.previousEntry, outputPaths);
+  const previousFiles = removeOldGeneratedFiles(outDir, options.previousEntry, outputPaths);
 
   const entry = {
     ...(options.previousEntry || {}),
@@ -307,10 +315,15 @@ async function mirrorPage(options) {
   delete entry.error;
   delete entry.errorName;
   delete entry.failedAt;
-  if (removedPreviousPaths.length) {
-    entry.previousPath = removedPreviousPaths[0];
-    entry.previousPaths = removedPreviousPaths;
+  if (previousFiles.removed.length) {
+    entry.previousPath = previousFiles.removed[0];
+    entry.previousPaths = previousFiles.removed;
     entry.previousPathRemovedAt = mirroredAt;
+  }
+  if (previousFiles.skippedOutside.length) {
+    entry.previousPathsSkippedOutsideMirror = previousFiles.skippedOutside;
+  } else {
+    delete entry.previousPathsSkippedOutsideMirror;
   }
 
   const manifest = options.manifest || loadManifest(outDir);
@@ -358,6 +371,7 @@ if (require.main === module) {
     saveManifest,
     writeRegularFile,
     entryOutputPaths,
+    removeOldGeneratedFiles,
     partRelativePath,
     chunkBlocks,
   };

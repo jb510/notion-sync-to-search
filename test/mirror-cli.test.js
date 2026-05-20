@@ -6,11 +6,12 @@ const { execFileSync } = require('node:child_process');
 const test = require('node:test');
 const { blocksToMarkdown, getAllBlocks, getApiKey, shouldFetchBlockChildren, _resetTokenCache } = require('../scripts/notion-utils.js');
 const { _internal } = require('../scripts/mirror-config.js');
-const { chunkBlocks, partRelativePath } = require('../scripts/mirror-page.js');
+const { chunkBlocks, partRelativePath, removeOldGeneratedFiles } = require('../scripts/mirror-page.js');
 const { _internal: openclawInternal } = require('../scripts/install-openclaw-memory.js');
 
 const repo = path.resolve(__dirname, '..');
 const cli = path.join(repo, 'scripts', 'mirror-config.js');
+const schedulerCli = path.join(repo, 'scripts', 'install-scheduler.js');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(repo, '.tmp-test-'));
@@ -153,6 +154,19 @@ test('manifest entry cache hit requires regular file', () => {
   assert.equal(_internal.manifestEntryFileExists(dir, { path: directoryPath }), false);
 });
 
+test('manifest entry cache hit can use outDir-relative paths across working directories', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outDir = path.join(dir, 'mirror');
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(path.join(outDir, 'page.md'), 'content');
+
+  assert.equal(_internal.manifestEntryFileExists(outDir, {
+    path: 'notion-sync-read-only/Jon/page.md',
+    relativePath: 'page.md',
+  }), true);
+});
+
 test('manifest entry cache hit requires every generated part', () => {
   const dir = tmpdir();
   test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -266,6 +280,38 @@ test('large pages are split into stable markdown part paths', () => {
   assert.equal(partRelativePath('Folder/Huge Page - 3193f788.md', 2), 'Folder/Huge Page - 3193f788.part-002.md');
 });
 
+test('old manifest paths outside the current mirror are skipped during migration', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outDir = path.join(dir, 'new-mirror');
+  const oldDir = path.join(dir, 'old-mirror');
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.mkdirSync(oldDir, { recursive: true });
+  const oldFile = path.join(oldDir, 'Page.md');
+  fs.writeFileSync(oldFile, 'old');
+
+  const result = removeOldGeneratedFiles(outDir, { path: oldFile }, []);
+  assert.deepEqual(result.removed, []);
+  assert.deepEqual(result.skippedOutside, [oldFile]);
+  assert.equal(fs.existsSync(oldFile), true);
+});
+
+test('old generated file removal can use relativePath when cwd-relative path is stale', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outDir = path.join(dir, 'mirror');
+  fs.mkdirSync(outDir, { recursive: true });
+  const oldFile = path.join(outDir, 'Page.md');
+  fs.writeFileSync(oldFile, 'old');
+
+  const result = removeOldGeneratedFiles(outDir, {
+    path: 'notion-sync-read-only/Jon/Page.md',
+    relativePath: 'Page.md',
+  }, []);
+  assert.deepEqual(result.removed, [path.relative(process.cwd(), oldFile)]);
+  assert.equal(fs.existsSync(oldFile), false);
+});
+
 test('legacy 500 block limit becomes chunk size, not total page cap', () => {
   const limits = _internal.parseLimits({ limits: { maxBlocksPerPage: 500 } });
   assert.equal(limits.maxBlocksPerPage, 20000);
@@ -300,4 +346,90 @@ test('openclaw memory helper links agent workspaces to one mirror', () => {
   assert.deepEqual(updated.agents.defaults.memorySearch.extraPaths, ['notion-sync-read-only']);
   assert.equal(fs.lstatSync(path.join(coding, 'notion-sync-read-only')).isSymbolicLink(), true);
   assert.equal(result.links.some(link => link.agentId === 'coding' && link.action === 'linked'), true);
+});
+
+test('openclaw memory helper supports state-level absolute mirror paths', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const state = path.join(dir, 'state');
+  fs.mkdirSync(path.join(state, 'workspace'), { recursive: true });
+  const configPath = path.join(state, 'openclaw.json');
+  fs.writeFileSync(configPath, JSON.stringify({ agents: { defaults: {}, list: [] } }));
+
+  const result = openclawInternal.run(['--state-dir', state, '--json']);
+  const updated = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.deepEqual(updated.agents.defaults.memorySearch.extraPaths, [path.join(state, 'notion-sync-read-only')]);
+  assert.equal(result.configPath, configPath);
+  assert.equal(result.workspace, path.join(state, 'workspace'));
+  assert.equal(result.mirrorPath, path.join(state, 'notion-sync-read-only'));
+});
+
+test('openclaw memory helper can replace legacy notion mirror paths', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const state = path.join(dir, 'state');
+  fs.mkdirSync(path.join(state, 'workspace'), { recursive: true });
+  const configPath = path.join(state, 'openclaw.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    agents: {
+      defaults: {
+        memorySearch: {
+          extraPaths: ['notion-sync-read-only', '/old/state/notion-sync-read-only', '/keep/other-docs'],
+        },
+      },
+      list: [],
+    },
+  }));
+
+  openclawInternal.run(['--state-dir', state, '--replace-notion-paths', '--json']);
+  const updated = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.deepEqual(updated.agents.defaults.memorySearch.extraPaths, [
+    '/keep/other-docs',
+    path.join(state, 'notion-sync-read-only'),
+  ]);
+});
+
+test('mirror config lock blocks concurrent sync runs and releases cleanly', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const config = { outDir: path.join(dir, 'mirror') };
+  const first = _internal.acquireSyncLock(config, { configPath: path.join(dir, 'config.json') });
+  assert.equal(first.acquired, true);
+  assert.throws(() => _internal.acquireSyncLock(config, {}), /already running/);
+  first.release();
+  const second = _internal.acquireSyncLock(config, {});
+  assert.equal(second.acquired, true);
+  second.release();
+});
+
+test('scheduler helper can generate state-level install plan', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const state = path.join(dir, 'state');
+  fs.mkdirSync(path.join(state, 'config'), { recursive: true });
+  fs.writeFileSync(path.join(state, 'config', 'notion-search-mirror.json'), JSON.stringify({
+    outDir: path.join(state, 'notion-sync-read-only'),
+    sync: { intervalMinutes: 37 },
+  }));
+
+  const output = execFileSync(process.execPath, [
+    schedulerCli,
+    '--state-dir', state,
+    '--name', 'notion-sync-to-search',
+    '--json',
+  ], { cwd: repo, encoding: 'utf8' });
+  const plan = JSON.parse(output);
+  assert.equal(plan.kind, process.platform === 'darwin' ? 'launchd' : 'systemd');
+  assert.match(plan.content, /notion-search-mirror\.json/);
+  assert.match(plan.content, /notion-sync-to-search\.log/);
+  assert.match(plan.content, /state/);
+  if (process.platform === 'darwin') {
+    assert.equal(plan.path, path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.openclaw.notion-sync-to-search.plist'));
+    assert.match(plan.content, /StartInterval/);
+    assert.match(plan.content, /2220/);
+  } else {
+    assert.equal(plan.path, path.join(os.homedir(), '.config', 'systemd', 'user', 'notion-sync-to-search.service'));
+    assert.match(plan.content, /EnvironmentFile=-/);
+    assert.match(plan.content, /WorkingDirectory=/);
+  }
 });

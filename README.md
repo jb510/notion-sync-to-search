@@ -8,6 +8,16 @@ Notion is a good source of truth, but live API search is not a great full-text k
 
 The local files are cache, not canonical content.
 
+For OpenClaw, the preferred layout is install-scoped:
+
+```text
+<openclaw-state>/skills/notion-sync-to-search/
+<openclaw-state>/config/notion-search-mirror.json
+<openclaw-state>/notion-sync-read-only/<Notion workspace name>/
+```
+
+That makes the skill and mirror available to all agents in one OpenClaw install without copying the skill or mirror into every agent workspace.
+
 ## Policy
 
 - Notion is source of truth.
@@ -70,15 +80,34 @@ Configure notion-sync-to-search to mirror my integration-visible Notion workspac
 Then schedule recurring refresh:
 
 ```bash
-node scripts/install-scheduler.js --config config/notion-search-mirror.json
+node scripts/install-scheduler.js --state-dir ~/.openclaw
 ```
 
-By default, `install-scheduler.js` reads `sync.intervalMinutes` from the config, then prints the launchd/systemd/cron files and activation commands for the host. Use `--mode install` if you want it to write the scheduler files for you. The scheduler does not store `NOTION_API_KEY`; configure that secret in the scheduler runtime environment.
+By default, `install-scheduler.js` reads `sync.intervalMinutes` from `<state>/config/notion-search-mirror.json`, then prints the launchd/systemd files and activation commands for the host. Use `--mode install` if you want it to write the scheduler files for you. The generated scheduler loads `<state>/.env` when present; keep `NOTION_API_KEY` there instead of copying it into agent workspaces.
 
 Override the config interval for one scheduler generation with:
 
 ```bash
 node scripts/install-scheduler.js --config config/notion-search-mirror.json --every 240
+```
+
+Linux OpenClaw container example:
+
+```bash
+node /root/.openclaw/skills/notion-sync-to-search/scripts/install-scheduler.js \
+  --state-dir /root/.openclaw \
+  --name notion-sync-to-search \
+  --systemd-scope system \
+  --mode install
+```
+
+macOS OpenClaw install example:
+
+```bash
+node /Users/walden/OpenClaw/anastasia/state/skills/notion-sync-to-search/scripts/install-scheduler.js \
+  --state-dir /Users/walden/OpenClaw/anastasia/state \
+  --name notion-sync-to-search-anastasia \
+  --mode install
 ```
 
 Manual sync is still useful for immediate refresh or debugging:
@@ -177,10 +206,12 @@ Each normal refresh is incremental:
 The scheduler runs:
 
 ```text
-node scripts/mirror-config.js config/notion-search-mirror.json
+node scripts/mirror-config.js <state>/config/notion-search-mirror.json
 ```
 
 That command updates markdown files under `notion-sync-read-only/` only for new or changed pages and updates `.notion-search-mirror.json`. OpenClaw's memory/search backend then sees changed local markdown according to that backend's normal indexing behavior. Some installs may pick up file changes quickly; others may need the user to restart/reindex/refresh memory search.
+
+Each normal sync takes an exclusive lock at `<outDir>/.notion-sync-to-search.lock`. A second overlapping run exits immediately with a clear "already running" error. Stale locks older than `sync.lockStaleMinutes` are removed automatically; by default that threshold is based on `limits.maxRunMinutes`.
 
 Manual refresh exists for debugging and immediate catch-up, not as the expected steady-state workflow. Use `--full` when you want a manual reconciliation that ignores the manifest and refetches all currently visible pages.
 
@@ -316,7 +347,17 @@ qmd vsearch "semantic query"
 
 Direct QMD status is the source of truth for whether QMD has vectors for its own index. The skill does not need a `vector=true` setting; it only needs the mirror path included in the memory/search paths.
 
-For OpenClaw installs with multiple agent workspaces, use the helper script from the primary workspace that contains the synced mirror:
+For OpenClaw installs with multiple agent workspaces, prefer an absolute install-level mirror path:
+
+```bash
+node ~/.openclaw/skills/notion-sync-to-search/scripts/install-openclaw-memory.js \
+  --state-dir ~/.openclaw \
+  --replace-notion-paths
+```
+
+The helper adds the absolute `<state>/notion-sync-read-only` path to `agents.defaults.memorySearch.extraPaths` and backs up `openclaw.json` before editing it. `--replace-notion-paths` removes legacy `notion-sync-read-only` entries that pointed at per-workspace mirrors, while preserving unrelated extra paths.
+
+Older per-workspace layouts can still use a relative mirror and workspace symlinks:
 
 ```bash
 cd ~/.openclaw/workspace
@@ -327,7 +368,7 @@ node skills/notion-sync-to-search/scripts/install-openclaw-memory.js \
   --link-agent-workspaces
 ```
 
-The helper adds `notion-sync-read-only` to `agents.defaults.memorySearch.extraPaths`. With `--link-agent-workspaces`, it also links each configured agent workspace back to the same read-only mirror because OpenClaw resolves relative `extraPaths` from each agent workspace. It refuses to overwrite non-empty existing paths and backs up `openclaw.json` before editing it.
+With `--link-agent-workspaces`, it links each configured agent workspace back to the same read-only mirror because relative `extraPaths` are workspace-dependent. It refuses to overwrite non-empty existing paths and backs up `openclaw.json` before editing it.
 
 Example QMD config:
 

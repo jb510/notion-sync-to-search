@@ -28,7 +28,7 @@ const {
 } = require('./mirror-page.js');
 
 function usage(exitCode = 0) {
-  console.log('Usage: mirror-config.js <config.json> [--full] [--dry-run] [--status] [--doctor] [--prune safe|force|off] [--report] [--json]');
+  console.log('Usage: mirror-config.js <config.json> [--full] [--dry-run] [--status] [--doctor] [--prune safe|force|off] [--report] [--lock-file <path>] [--no-lock] [--json]');
   console.log('');
   console.log('Options:');
   console.log('  --full      Refetch and rewrite every discovered page, even if last_edited_time is unchanged');
@@ -40,6 +40,8 @@ function usage(exitCode = 0) {
   console.log('  --dry-run   Discover changes and pruning candidates without writing/deleting');
   console.log('  --days      Report lookback window in days (default: 7)');
   console.log('  --workspace-folder <name|none>  Select local workspace folder for reports/failure recording');
+  console.log('  --lock-file <path>  Override sync lock file path (default: <outDir>/.notion-sync-to-search.lock)');
+  console.log('  --no-lock   Disable sync lock protection for this run');
   console.log('');
   console.log('Config shape:');
   console.log(JSON.stringify({
@@ -58,7 +60,7 @@ function parseArgs(argv) {
   const args = stripTokenArg(argv);
   if (args.length < 1 || args[0] === '--help' || args[0] === '-h') usage(args[0] ? 0 : 1);
 
-  const options = { configPath: args[0], full: false, dryRun: false, status: false, doctor: false, pruneMode: 'safe', report: false, reportDays: 7, workspaceFolder: null };
+  const options = { configPath: args[0], full: false, dryRun: false, status: false, doctor: false, pruneMode: 'safe', report: false, reportDays: 7, workspaceFolder: null, lock: true, lockFile: null };
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--full' || args[i] === '--force') {
       options.full = true;
@@ -76,6 +78,10 @@ function parseArgs(argv) {
       options.reportDays = parseLimit(args[++i], 7, 365);
     } else if (args[i] === '--workspace-folder' && args[i + 1]) {
       options.workspaceFolder = args[++i];
+    } else if (args[i] === '--lock-file' && args[i + 1]) {
+      options.lockFile = args[++i];
+    } else if (args[i] === '--no-lock') {
+      options.lock = false;
     } else if (args[i] === '--no-prune') {
       options.pruneMode = 'off';
     } else {
@@ -254,14 +260,26 @@ function shouldMirrorWorkspace(config) {
   return scope === 'integration-visible-workspace';
 }
 
-function manifestEntryFileExists(outDir, entry) {
+function manifestEntryPaths(outDir, entry) {
   const paths = [];
-  if (entry?.path) paths.push(entry.path);
-  for (const file of entry?.files || []) {
-    if (file?.path) paths.push(file.path);
+  const files = Array.isArray(entry?.files) ? entry.files : [];
+  if (files.length > 0) {
+    for (const file of files) {
+      if (file?.relativePath) paths.push(path.join(outDir, file.relativePath));
+      else if (file?.path) paths.push(file.path);
+    }
+  } else if (entry?.relativePath) {
+    paths.push(path.join(outDir, entry.relativePath));
+  } else if (entry?.path) {
+    paths.push(entry.path);
   }
+  return [...new Set(paths)];
+}
+
+function manifestEntryFileExists(outDir, entry) {
+  const paths = manifestEntryPaths(outDir, entry);
   if (!paths.length) return false;
-  return [...new Set(paths)].every(entryPath => {
+  return paths.every(entryPath => {
     const filePath = resolveSafePath(entryPath, { mode: 'write' });
     if (!isInside(outDir, filePath) || !fs.existsSync(filePath)) return false;
     const stat = fs.lstatSync(filePath);
@@ -431,6 +449,66 @@ function writeReportOutputs(config, report, text) {
 function configuredOutDir(config) {
   return config.outDir || DEFAULT_OUT_DIR;
 }
+function syncLockPath(config, options = {}) {
+  const configured = options.lockFile || config.sync?.lockFile || path.join(configuredOutDir(config), '.notion-sync-to-search.lock');
+  return resolveSafePath(configured, { mode: 'write' });
+}
+
+function syncLockStaleMs(config) {
+  const limits = parseLimits(config);
+  const staleMinutes = parseLimit(config.sync?.lockStaleMinutes, limits.maxRunMinutes + 15, 24 * 60);
+  return staleMinutes * 60 * 1000;
+}
+
+function acquireSyncLock(config, options = {}) {
+  if (options.lock === false || options.report || options.status || options.doctor) {
+    return { acquired: false, release() {} };
+  }
+
+  const lockPath = syncLockPath(config, options);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const staleMs = syncLockStaleMs(config);
+
+  try {
+    const stat = fs.statSync(lockPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    if (ageMs > staleMs) fs.unlinkSync(lockPath);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
+  let fd;
+  try {
+    fd = fs.openSync(lockPath, 'wx', 0o600);
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      const detail = fs.readFileSync(lockPath, 'utf8').trim();
+      const lockError = new Error(`Notion mirror sync already running; lock exists at ${lockPath}${detail ? `: ${detail}` : ''}`);
+      lockError.skipFailureRecord = true;
+      throw lockError;
+    }
+    throw error;
+  }
+
+  const body = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), configPath: options.configPath || '' }) + '\n';
+  try {
+    fs.writeSync(fd, body);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return {
+    acquired: true,
+    path: lockPath,
+    release() {
+      try {
+        if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
+      } catch (_) {
+        // Best-effort cleanup only.
+      }
+    },
+  };
+}
+
 
 function localOutputForWorkspaceFolder(config, workspaceFolder) {
   const baseOutDir = configuredOutDir(config);
@@ -649,7 +727,7 @@ function mirrorStatus(config, options = {}) {
     const safeOutDir = resolveSafePath(output.outDir, { mode: 'write' });
     const manifest = loadManifest(safeOutDir);
     const pages = Object.values(manifest.pages || {});
-    const missingFiles = pages.filter(entry => !entry.path || !fs.existsSync(resolveSafePath(entry.path, { mode: 'write' })));
+    const missingFiles = pages.filter(entry => !manifestEntryFileExists(safeOutDir, entry));
     const lastRun = manifest.lastRun || null;
     const indexFreshness = checkIndexFreshness(config, manifest);
     return {
@@ -1073,7 +1151,13 @@ async function main() {
     }
 
     assertSyncTokens(config);
-    const results = await mirrorConfigAll(config, options);
+    const lock = acquireSyncLock(config, options);
+    let results;
+    try {
+      results = await mirrorConfigAll(config, options);
+    } finally {
+      lock.release();
+    }
 
     if (hasJsonFlag()) {
       console.log(JSON.stringify(results, null, 2));
@@ -1117,10 +1201,13 @@ if (require.main === module) {
     _internal: {
       defaultPagePath,
       manifestEntryFileExists,
+      manifestEntryPaths,
       parseLimits,
       pageErrorEntry,
       updateSkippedEntry,
       withWorkspaceToken,
+      acquireSyncLock,
+      syncLockPath,
       workspaceConfigs,
     },
   };

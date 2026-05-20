@@ -2,8 +2,8 @@
 /**
  * Print or install host scheduler entries for recurring Notion mirror refresh.
  *
- * This script does not store NOTION_API_KEY. Configure that secret in the
- * runtime environment used by the scheduler.
+ * This script does not store NOTION_API_KEY. Point schedulers at an install
+ * state .env file or configure the token in the scheduler runtime environment.
  */
 
 const fs = require('fs');
@@ -20,11 +20,12 @@ const DEFAULT_NAME = 'notion-sync-to-search';
 const DEFAULT_EVERY_MINUTES = 60;
 
 function usage(exitCode = 0) {
-  console.log('Usage: install-scheduler.js [--config <path>] [--every <minutes>] [--name <name>] [--report] [--days <n>] [--mode print|install] [--json]');
+  console.log('Usage: install-scheduler.js [--config <path>] [--state-dir <path>] [--every <minutes>] [--name <name>] [--env-file <path>] [--log-dir <path>] [--systemd-scope user|system] [--report] [--days <n>] [--mode print|install] [--json]');
   console.log('');
   console.log('Examples:');
-  console.log('  install-scheduler.js --config config/notion-search-mirror.json --every 60');
-  console.log('  install-scheduler.js --mode install --every 240');
+  console.log('  install-scheduler.js --state-dir /root/.openclaw --systemd-scope system --mode install');
+  console.log('  install-scheduler.js --state-dir /Users/walden/OpenClaw/anastasia/state --name notion-sync-to-search-anastasia --mode install');
+  console.log('  install-scheduler.js --config config/notion-search-mirror.json --every 240');
   process.exit(exitCode);
 }
 
@@ -32,30 +33,34 @@ function parseArgs(argv) {
   const args = stripTokenArg(argv);
   const options = {
     configPath: DEFAULT_CONFIG,
+    configSetByCli: false,
+    stateDir: null,
     everyMinutes: null,
+    everySetByCli: false,
     name: DEFAULT_NAME,
     nameSetByCli: false,
+    envFile: null,
+    logDir: null,
+    systemdScope: 'user',
     mode: 'print',
-    everySetByCli: false,
     report: false,
     reportDays: 7,
   };
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--help' || args[i] === '-h') usage(0);
-    else if (args[i] === '--config' && args[i + 1]) options.configPath = args[++i];
-    else if (args[i] === '--every' && args[i + 1]) {
-      options.everyMinutes = parsePositiveInt(args[++i], DEFAULT_EVERY_MINUTES);
-      options.everySetByCli = true;
-    }
-    else if (args[i] === '--name' && args[i + 1]) {
-      options.name = sanitizeName(args[++i]);
-      options.nameSetByCli = true;
-    }
-    else if (args[i] === '--report') options.report = true;
-    else if (args[i] === '--days' && args[i + 1]) options.reportDays = parsePositiveInt(args[++i], 7);
-    else if (args[i] === '--mode' && args[i + 1]) options.mode = parseMode(args[++i]);
-    else throw new Error(`Unknown argument: ${args[i]}`);
+    const arg = args[i];
+    if (arg === '--help' || arg === '-h') usage(0);
+    else if (arg === '--config' && args[i + 1]) { options.configPath = args[++i]; options.configSetByCli = true; }
+    else if (arg === '--state-dir' && args[i + 1]) options.stateDir = args[++i];
+    else if (arg === '--every' && args[i + 1]) { options.everyMinutes = parsePositiveInt(args[++i], DEFAULT_EVERY_MINUTES); options.everySetByCli = true; }
+    else if (arg === '--name' && args[i + 1]) { options.name = sanitizeName(args[++i]); options.nameSetByCli = true; }
+    else if (arg === '--env-file' && args[i + 1]) options.envFile = args[++i];
+    else if (arg === '--log-dir' && args[i + 1]) options.logDir = args[++i];
+    else if (arg === '--systemd-scope' && args[i + 1]) options.systemdScope = parseSystemdScope(args[++i]);
+    else if (arg === '--report') options.report = true;
+    else if (arg === '--days' && args[i + 1]) options.reportDays = parsePositiveInt(args[++i], 7);
+    else if (arg === '--mode' && args[i + 1]) options.mode = parseMode(args[++i]);
+    else throw new Error(`Unknown or incomplete argument: ${arg}`);
   }
 
   return options;
@@ -71,13 +76,25 @@ function parseMode(value) {
   throw new Error('--mode must be "print" or "install"');
 }
 
+function parseSystemdScope(value) {
+  if (value === 'user' || value === 'system') return value;
+  throw new Error('--systemd-scope must be "user" or "system"');
+}
+
 function sanitizeName(value) {
   const cleaned = String(value || DEFAULT_NAME).replace(/[^a-zA-Z0-9_.-]/g, '-');
   return cleaned || DEFAULT_NAME;
 }
 
+function expandHome(value) {
+  if (!value) return value;
+  if (value === '~') return os.homedir();
+  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
 function shellQuote(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+  return `'${String(value).replace(/'/g, `'\''`)}'`;
 }
 
 function xmlEscape(value) {
@@ -89,20 +106,35 @@ function xmlEscape(value) {
     .replace(/'/g, '&apos;');
 }
 
+function readConfigIfPresent(configPath) {
+  try {
+    return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch (_) {
+    return {};
+  }
+}
+
 function buildContext(options) {
-  const workdir = process.cwd();
-  const configPath = resolveSafePath(options.configPath, { mode: 'read' });
+  const stateDir = options.stateDir ? path.resolve(expandHome(options.stateDir)) : null;
+  const workdir = stateDir || process.cwd();
+  const configCandidate = stateDir && !options.configSetByCli
+    ? path.join(stateDir, 'config', 'notion-search-mirror.json')
+    : options.configPath;
+  const configPath = resolveSafePath(configCandidate, { mode: 'read' });
   const config = readConfigIfPresent(configPath);
   const configuredEvery = parsePositiveInt(config?.sync?.intervalMinutes, DEFAULT_EVERY_MINUTES);
   const scriptPath = path.resolve(__dirname, 'mirror-config.js');
   const nodePath = process.execPath;
-  const logPath = path.join(workdir, options.report ? '.notion-sync-to-search-report.log' : '.notion-sync-to-search.log');
+  const logDir = options.logDir ? path.resolve(expandHome(options.logDir)) : path.join(workdir, 'logs');
+  const logPath = path.join(logDir, options.report ? 'notion-sync-to-search-report.log' : 'notion-sync-to-search.log');
+  const envFile = options.envFile ? path.resolve(expandHome(options.envFile)) : (stateDir ? path.join(stateDir, '.env') : null);
   const commandArgs = options.report
     ? [scriptPath, configPath, '--report', '--days', String(options.reportDays)]
     : [scriptPath, configPath];
 
   return {
     ...options,
+    stateDir,
     name: options.report && !options.nameSetByCli ? `${options.name}-report` : options.name,
     everyMinutes: options.everySetByCli ? options.everyMinutes : configuredEvery,
     workdir,
@@ -110,16 +142,15 @@ function buildContext(options) {
     scriptPath,
     nodePath,
     commandArgs,
+    logDir,
     logPath,
+    envFile,
   };
 }
 
-function readConfigIfPresent(configPath) {
-  try {
-    return JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  } catch (_) {
-    return {};
-  }
+function commandString(ctx) {
+  const envPrefix = ctx.envFile ? `set -a; [ -f ${shellQuote(ctx.envFile)} ] && . ${shellQuote(ctx.envFile)}; set +a; ` : '';
+  return `${envPrefix}mkdir -p ${shellQuote(path.dirname(ctx.logPath))}; cd ${shellQuote(ctx.workdir)} && ${shellQuote(ctx.nodePath)} ${ctx.commandArgs.map(shellQuote).join(' ')} >> ${shellQuote(ctx.logPath)} 2>&1`;
 }
 
 function buildLaunchd(ctx) {
@@ -135,8 +166,9 @@ function buildLaunchd(ctx) {
   <string>${xmlEscape(ctx.workdir)}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${xmlEscape(ctx.nodePath)}</string>
-${ctx.commandArgs.map(arg => `    <string>${xmlEscape(arg)}</string>`).join('\n')}
+    <string>/bin/sh</string>
+    <string>-lc</string>
+    <string>${xmlEscape(commandString(ctx))}</string>
   </array>
   <key>StartInterval</key>
   <integer>${ctx.everyMinutes * 60}</integer>
@@ -154,21 +186,22 @@ ${ctx.commandArgs.map(arg => `    <string>${xmlEscape(arg)}</string>`).join('\n'
     content: plist,
     installNotes: [
       `mkdir -p ${shellQuote(path.dirname(plistPath))}`,
-      `launchctl setenv NOTION_API_KEY '<your-notion-token>'`,
       `launchctl bootstrap gui/$(id -u) ${shellQuote(plistPath)}`,
       `launchctl enable gui/$(id -u)/${label}`,
+      `launchctl kickstart -k gui/$(id -u)/${label}`,
     ],
   };
 }
 
 function buildSystemd(ctx) {
-  const unitDir = path.join(os.homedir(), '.config', 'systemd', 'user');
+  const unitDir = ctx.systemdScope === 'system' ? '/etc/systemd/system' : path.join(os.homedir(), '.config', 'systemd', 'user');
   const servicePath = path.join(unitDir, `${ctx.name}.service`);
   const timerPath = path.join(unitDir, `${ctx.name}.timer`);
-  const command = `mkdir -p ${shellQuote(path.dirname(ctx.logPath))} && ${shellQuote(ctx.nodePath)} ${ctx.commandArgs.map(shellQuote).join(' ')} >> ${shellQuote(ctx.logPath)} 2>&1`;
+  const envLine = ctx.envFile ? `EnvironmentFile=-${ctx.envFile}\n` : '';
+  const execArgs = ctx.commandArgs.map(arg => arg.includes(' ') ? shellQuote(arg) : arg).join(' ');
 
   return {
-    kind: 'systemd',
+    kind: ctx.systemdScope === 'system' ? 'systemd-system' : 'systemd-user',
     files: [
       {
         path: servicePath,
@@ -178,7 +211,10 @@ Description=Refresh Notion search mirror
 [Service]
 Type=oneshot
 WorkingDirectory=${ctx.workdir}
-ExecStart=/bin/sh -lc ${shellQuote(command)}
+${envLine}ExecStartPre=/bin/mkdir -p ${path.dirname(ctx.logPath)}
+ExecStart=${ctx.nodePath} ${execArgs}
+StandardOutput=append:${ctx.logPath}
+StandardError=append:${ctx.logPath}
 `,
       },
       {
@@ -190,53 +226,53 @@ Description=Refresh Notion search mirror every ${ctx.everyMinutes} minutes
 OnBootSec=5m
 OnUnitActiveSec=${ctx.everyMinutes}m
 Unit=${ctx.name}.service
+Persistent=true
 
 [Install]
 WantedBy=timers.target
 `,
       },
     ],
-    installNotes: [
-      `mkdir -p ${shellQuote(unitDir)}`,
-      'Set NOTION_API_KEY in the user systemd environment before enabling the timer.',
-      "systemctl --user import-environment NOTION_API_KEY",
-      'systemctl --user daemon-reload',
-      `systemctl --user enable --now ${shellQuote(`${ctx.name}.timer`)}`,
-    ],
+    installNotes: ctx.systemdScope === 'system'
+      ? [
+        'systemctl daemon-reload',
+        `systemctl enable --now ${shellQuote(`${ctx.name}.timer`)}`,
+        `systemctl start ${shellQuote(`${ctx.name}.service`)}`,
+      ]
+      : [
+        `mkdir -p ${shellQuote(unitDir)}`,
+        ctx.envFile ? `Ensure ${ctx.envFile} contains NOTION_API_KEY` : 'Set NOTION_API_KEY in the user systemd environment before enabling the timer.',
+        'systemctl --user daemon-reload',
+        `systemctl --user enable --now ${shellQuote(`${ctx.name}.timer`)}`,
+      ],
   };
 }
 
 function buildCron(ctx) {
-  const command = `cd ${shellQuote(ctx.workdir)} && mkdir -p ${shellQuote(path.dirname(ctx.logPath))} && ${shellQuote(ctx.nodePath)} ${ctx.commandArgs.map(shellQuote).join(' ')} >> ${shellQuote(ctx.logPath)} 2>&1`;
+  const command = commandString(ctx);
   if (ctx.everyMinutes < 60) {
     return {
       kind: 'cron',
       content: `*/${ctx.everyMinutes} * * * * ${command}`,
-      installNotes: [
-        'Add this line to the user crontab after ensuring NOTION_API_KEY is available to cron.',
-        'crontab -e',
-      ],
+      installNotes: ['Add this line to the user crontab.', 'crontab -e'],
     };
   }
 
   const intervalSeconds = ctx.everyMinutes * 60;
   const stampPath = path.join(ctx.workdir, `.${ctx.name}.last-run`);
   const gatedCommand = [
-    `now=$(date +\\%s)`,
+    `now=$(date +\%s)`,
     `last=$(cat ${shellQuote(stampPath)} 2>/dev/null || echo 0)`,
     `if [ $((now - last)) -ge ${intervalSeconds} ]; then`,
     `echo "$now" > ${shellQuote(stampPath)}`,
-    `${command}`,
+    command,
     'fi',
   ].join('; ');
 
   return {
     kind: 'cron',
     content: `* * * * ${gatedCommand}`,
-    installNotes: [
-      'Add this line to the user crontab after ensuring NOTION_API_KEY is available to cron.',
-      'crontab -e',
-    ],
+    installNotes: ['Add this line to the user crontab.', 'crontab -e'],
   };
 }
 
@@ -306,9 +342,8 @@ function main() {
 
     if (options.mode === 'install') {
       const written = installPlan(plan);
-      if (hasJsonFlag()) {
-        console.log(JSON.stringify({ installed: written, plan }, null, 2));
-      } else {
+      if (hasJsonFlag()) console.log(JSON.stringify({ installed: written, plan }, null, 2));
+      else {
         console.log(`Installed scheduler file(s): ${written.join(', ') || '(none)'}`);
         console.log('Next steps:');
         for (const note of plan.installNotes) console.log(`  ${note}`);
@@ -325,3 +360,11 @@ function main() {
 }
 
 if (require.main === module) main();
+
+module.exports = {
+  _internal: {
+    buildContext,
+    buildPlan,
+    parseArgs,
+  },
+};

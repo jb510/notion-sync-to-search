@@ -2,10 +2,6 @@
 
 /**
  * Wire the Notion mirror into OpenClaw memory/search.
- *
- * OpenClaw resolves relative memory extraPaths from each agent workspace. When
- * one shared mirror is synced into the primary workspace, multi-agent installs
- * need each agent workspace to expose the same relative path.
  */
 
 const fs = require('fs');
@@ -13,9 +9,11 @@ const os = require('os');
 const path = require('path');
 
 function usage() {
-  console.log('Usage: install-openclaw-memory.js [--config <openclaw.json>] [--workspace <path>] [--mirror-path <path>] [--link-agent-workspaces] [--dry-run] [--json]');
+  console.log('Usage: install-openclaw-memory.js [--state-dir <path>] [--config <openclaw.json>] [--workspace <path>] [--mirror-path <path>] [--replace-notion-paths] [--link-agent-workspaces] [--dry-run] [--json]');
   console.log('');
   console.log('Examples:');
+  console.log('  install-openclaw-memory.js --state-dir ~/.openclaw --replace-notion-paths');
+  console.log('  install-openclaw-memory.js --config ~/.openclaw/openclaw.json --mirror-path ~/.openclaw/notion-sync-read-only');
   console.log('  install-openclaw-memory.js --config ~/.openclaw/openclaw.json --workspace ~/.openclaw/workspace --mirror-path notion-sync-read-only --link-agent-workspaces');
   console.log('  install-openclaw-memory.js --dry-run --json');
 }
@@ -29,9 +27,11 @@ function expandHome(value) {
 
 function parseArgs(argv) {
   const options = {
+    stateDir: null,
     configPath: process.env.OPENCLAW_CONFIG_PATH || path.join(os.homedir(), '.openclaw', 'openclaw.json'),
     workspace: process.cwd(),
-    mirrorPath: 'notion-sync-read-only',
+    mirrorPath: null,
+    replaceNotionPaths: false,
     linkAgentWorkspaces: false,
     dryRun: false,
     json: false,
@@ -42,12 +42,16 @@ function parseArgs(argv) {
     if (arg === '--help' || arg === '-h') {
       usage();
       process.exit(0);
+    } else if (arg === '--state-dir' && argv[i + 1]) {
+      options.stateDir = argv[++i];
     } else if (arg === '--config' && argv[i + 1]) {
       options.configPath = argv[++i];
     } else if (arg === '--workspace' && argv[i + 1]) {
       options.workspace = argv[++i];
     } else if (arg === '--mirror-path' && argv[i + 1]) {
       options.mirrorPath = argv[++i];
+    } else if (arg === '--replace-notion-paths') {
+      options.replaceNotionPaths = true;
     } else if (arg === '--link-agent-workspaces') {
       options.linkAgentWorkspaces = true;
     } else if (arg === '--dry-run') {
@@ -59,10 +63,20 @@ function parseArgs(argv) {
     }
   }
 
+  if (options.stateDir) {
+    options.stateDir = path.resolve(expandHome(options.stateDir));
+    if (!argv.includes('--config')) options.configPath = path.join(options.stateDir, 'openclaw.json');
+    if (!argv.includes('--workspace')) options.workspace = path.join(options.stateDir, 'workspace');
+    if (!argv.includes('--mirror-path')) options.mirrorPath = path.join(options.stateDir, 'notion-sync-read-only');
+  }
+
   options.configPath = path.resolve(expandHome(options.configPath));
   options.workspace = path.resolve(expandHome(options.workspace));
-  options.mirrorPath = options.mirrorPath.trim();
+  options.mirrorPath = (options.mirrorPath || 'notion-sync-read-only').trim();
   if (!options.mirrorPath) throw new Error('--mirror-path is required');
+  if (path.isAbsolute(expandHome(options.mirrorPath))) {
+    options.mirrorPath = path.resolve(expandHome(options.mirrorPath));
+  }
   return options;
 }
 
@@ -89,13 +103,22 @@ function timestamp() {
   return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 }
 
-function ensureExtraPath(config, mirrorPath) {
+function isLegacyNotionMirrorPath(value) {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return normalized === 'notion-sync-read-only' || normalized.endsWith('/notion-sync-read-only');
+}
+
+function ensureExtraPath(config, mirrorPath, options = {}) {
   config.agents = config.agents || {};
   config.agents.defaults = config.agents.defaults || {};
   config.agents.defaults.memorySearch = config.agents.defaults.memorySearch || {};
   const existing = config.agents.defaults.memorySearch.extraPaths || [];
+  const base = options.replaceNotionPaths
+    ? existing.filter(value => !isLegacyNotionMirrorPath(value))
+    : existing;
   const next = Array.from(new Set(
-    [...existing, mirrorPath]
+    [...base, mirrorPath]
       .filter(value => typeof value === 'string')
       .map(value => value.trim())
       .filter(Boolean),
@@ -178,7 +201,7 @@ function run(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const raw = fs.readFileSync(options.configPath, 'utf8');
   const config = readJson(options.configPath);
-  const extraPaths = ensureExtraPath(config, options.mirrorPath);
+  const extraPaths = ensureExtraPath(config, options.mirrorPath, options);
   const links = options.linkAgentWorkspaces ? linkAgentWorkspaces(config, options) : [];
   let backupPath = null;
 
@@ -191,8 +214,10 @@ function run(argv = process.argv.slice(2)) {
 
   const result = {
     configPath: options.configPath,
+    stateDir: options.stateDir,
     workspace: options.workspace,
     mirrorPath: options.mirrorPath,
+    replaceNotionPaths: options.replaceNotionPaths,
     extraPaths,
     backupPath,
     dryRun: options.dryRun,
@@ -225,6 +250,7 @@ module.exports = {
   _internal: {
     agentWorkspaces,
     ensureExtraPath,
+    isLegacyNotionMirrorPath,
     parseArgs,
     run,
   },
