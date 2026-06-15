@@ -159,27 +159,41 @@ function loadEnvFile(envFile) {
 }
 
 function logSyncResults(results, options = {}) {
-  log(`Notion mirror sync complete${results.outDir ? ` into ${results.outDir}` : ''}`);
-  log(`  Seen: ${results.run.seen}`);
-  log(`  Refreshed: ${results.run.refreshed}`);
-  log(`  Skipped unchanged: ${results.run.skipped}`);
-  log(`  Pruned stale: ${results.run.pruned}`);
-  if (results.run.pruneSkippedReason) log(`  Prune skipped: ${results.run.pruneSkippedReason}`);
-  if (results.run.discoveryComplete === false) log('  Discovery: incomplete');
-  if (results.run.errors > 0) log(`  Errors: ${results.run.errors}`);
-  if (results.full) log('  Mode: full reconciliation');
+  const write = message => console.log(message);
+  write(`Notion mirror sync complete${results.outDir ? ` into ${results.outDir}` : ''}`);
+  write(`  Seen: ${results.run.seen}`);
+  write(`  Refreshed: ${results.run.refreshed}`);
+  write(`  Skipped unchanged: ${results.run.skipped}`);
+  write(`  Pruned stale: ${results.run.pruned}`);
+  if (results.run.pruneSkippedReason) write(`  Prune skipped: ${results.run.pruneSkippedReason}`);
+  if (results.run.discoveryComplete === false) write('  Discovery: incomplete');
+  if (results.run.errors > 0) write(`  Errors: ${results.run.errors}`);
+  if (results.run.failedWorkspaces > 0) write(`  Failed workspaces: ${results.run.failedWorkspaces}`);
+  if (results.full) write('  Mode: full reconciliation');
 
-  if (options.verbose) {
-    for (const result of results.refreshed || []) log(`  - refreshed ${result.title}: ${result.path || result.relativePath || ''}`);
-    for (const result of results.errors || []) log(`  - error ${result.title || result.pageId}: ${result.error}`);
-    for (const result of results.pruned || []) log(`  - ${result.dryRun ? 'would prune' : 'pruned'} ${result.title || result.pageId}: ${result.path}`);
-  } else if ((results.errors || []).length > 0) {
-    const shown = results.errors.slice(0, 5);
-    for (const result of shown) log(`  - error ${result.title || result.pageId}: ${result.error}`);
-    if (results.errors.length > shown.length) log(`  - ${results.errors.length - shown.length} more error(s); rerun with --verbose for full details`);
+  if (results.multiWorkspace) {
+    for (const workspace of results.workspaces || []) {
+      const run = workspace.run || {};
+      const failed = workspace.failed ? ' failed=yes' : '';
+      write(`  Workspace ${workspace.name}: seen=${run.seen || 0} refreshed=${run.refreshed || 0} skipped=${run.skipped || 0} pruned=${run.pruned || 0} errors=${run.errors || 0}${failed}`);
+      if (workspace.error) write(`    error: ${workspace.error}`);
+    }
   }
 
-  log('Mode: read-only cache; edit Notion directly');
+  if (options.verbose) {
+    const refreshed = results.multiWorkspace ? results.workspaces.flatMap(workspace => workspace.refreshed || []) : (results.refreshed || []);
+    const errors = results.multiWorkspace ? results.workspaces.flatMap(workspace => workspace.errors || []) : (results.errors || []);
+    const pruned = results.multiWorkspace ? results.workspaces.flatMap(workspace => workspace.pruned || []) : (results.pruned || []);
+    for (const result of refreshed) write(`  - refreshed ${result.title}: ${result.path || result.relativePath || ''}`);
+    for (const result of errors) write(`  - error ${result.title || result.pageId}: ${result.error}`);
+    for (const result of pruned) write(`  - ${result.dryRun ? 'would prune' : 'pruned'} ${result.title || result.pageId}: ${result.path}`);
+  } else if ((results.errors || []).length > 0) {
+    const shown = results.errors.slice(0, 5);
+    for (const result of shown) write(`  - error ${result.title || result.pageId}: ${result.error}`);
+    if (results.errors.length > shown.length) write(`  - ${results.errors.length - shown.length} more error(s); rerun with --verbose for full details`);
+  }
+
+  write('Mode: read-only cache; edit Notion directly');
 }
 
 function sanitizePathSegment(value) {
@@ -530,6 +544,12 @@ function writeReportOutputs(config, report, text) {
 function configuredOutDir(config) {
   return config.outDir || DEFAULT_OUT_DIR;
 }
+
+function configuredWorkspaceFolder(config) {
+  if (Object.prototype.hasOwnProperty.call(config, 'workspaceFolder')) return config.workspaceFolder;
+  if (Object.prototype.hasOwnProperty.call(config, 'outFolder')) return config.outFolder;
+  return 'auto';
+}
 function syncLockPath(config, options = {}) {
   const configured = options.lockFile || config.sync?.lockFile || path.join(configuredOutDir(config), '.notion-sync-to-search.lock');
   return resolveSafePath(configured, { mode: 'write' });
@@ -613,7 +633,7 @@ function localOutputForWorkspaceFolder(config, workspaceFolder) {
 
 function discoverManifestDirs(config) {
   const baseOutDir = configuredOutDir(config);
-  const workspaceFolder = config.workspaceFolder ?? 'auto';
+  const workspaceFolder = configuredWorkspaceFolder(config);
   const candidates = [];
 
   if (workspaceFolder && workspaceFolder !== 'auto') {
@@ -660,10 +680,26 @@ function resolveLocalReportOutputs(config, options = {}) {
     return [localOutputForWorkspaceFolder(config, options.workspaceFolder)];
   }
 
+  if (Array.isArray(config.workspaces) && config.workspaces.length > 0) {
+    const configured = workspaceConfigs(config)
+      .map(workspace => configuredWorkspaceFolder(workspace.config))
+      .filter(folder => folder && folder !== 'auto')
+      .map(folder => localOutputForWorkspaceFolder(config, folder));
+    const discovered = discoverManifestDirs(config);
+    const seen = new Set();
+    const combined = [...configured, ...discovered].filter(output => {
+      const safeOutDir = resolveSafePath(output.outDir, { mode: 'write' });
+      if (seen.has(safeOutDir)) return false;
+      seen.add(safeOutDir);
+      return true;
+    });
+    if (combined.length > 0) return combined;
+  }
+
   const discovered = discoverManifestDirs(config);
   if (discovered.length > 0) return discovered;
 
-  const workspaceFolder = config.workspaceFolder ?? 'auto';
+  const workspaceFolder = configuredWorkspaceFolder(config);
   if (workspaceFolder && workspaceFolder !== 'auto') {
     return [localOutputForWorkspaceFolder(config, workspaceFolder)];
   }
@@ -720,17 +756,15 @@ function syncReport(config, options = {}) {
 function workspaceConfigs(config) {
   if (!Array.isArray(config.workspaces) || config.workspaces.length === 0) {
     return [{
-      name: config.name || config.workspaceFolder || 'default',
+      name: config.name || configuredWorkspaceFolder(config) || 'default',
       tokenEnv: config.tokenEnv || null,
-      config,
+      config: normalizeWorkspaceConfig(config),
     }];
   }
   const base = { ...config };
   delete base.workspaces;
-  return config.workspaces.map((workspace, index) => ({
-    name: workspace.name || workspace.workspaceFolder || `workspace-${index + 1}`,
-    tokenEnv: workspace.tokenEnv || null,
-    config: {
+  return config.workspaces.map((workspace, index) => {
+    const merged = normalizeWorkspaceConfig({
       ...base,
       ...workspace,
       workspace: { ...(base.workspace || {}), ...(workspace.workspace || {}) },
@@ -739,8 +773,22 @@ function workspaceConfigs(config) {
       limits: { ...(base.limits || {}), ...(workspace.limits || {}) },
       databases: workspace.databases ?? base.databases ?? [],
       pages: workspace.pages ?? base.pages ?? [],
-    },
-  }));
+    });
+    return {
+      name: workspace.name || configuredWorkspaceFolder(merged) || `workspace-${index + 1}`,
+      tokenEnv: workspace.tokenEnv || null,
+      config: merged,
+    };
+  });
+}
+
+function normalizeWorkspaceConfig(config) {
+  const normalized = { ...config };
+  if (!Object.prototype.hasOwnProperty.call(normalized, 'workspaceFolder')
+      && Object.prototype.hasOwnProperty.call(normalized, 'outFolder')) {
+    normalized.workspaceFolder = normalized.outFolder;
+  }
+  return normalized;
 }
 
 function workspaceTokenStatus(config) {
@@ -784,22 +832,65 @@ async function mirrorConfigAll(config, options = {}) {
   if (workspaces.length === 1) {
     return withWorkspaceToken(workspaces[0], () => mirrorConfig(workspaces[0].config, options));
   }
+  await assertUniqueWorkspaceOutputs(workspaces);
   const results = [];
   for (const workspace of workspaces) {
-    const result = await withWorkspaceToken(workspace, () => mirrorConfig(workspace.config, options));
-    results.push({ name: workspace.name, ...result });
+    try {
+      const result = await withWorkspaceToken(workspace, () => mirrorConfig(workspace.config, options));
+      results.push({ name: workspace.name, ...result });
+    } catch (error) {
+      try {
+        await recordSyncFailure(workspace.config, options, error);
+      } catch (_) {
+        // Keep reporting the workspace sync failure itself.
+      }
+      results.push({
+        name: workspace.name,
+        failed: true,
+        error: error.message,
+        refreshed: [],
+        skipped: [],
+        pruned: [],
+        errors: [{ title: workspace.name, error: error.message }],
+        run: {
+          seen: 0,
+          refreshed: 0,
+          skipped: 0,
+          pruned: 0,
+          errors: 1,
+          failed: true,
+          discoveryComplete: false,
+        },
+      });
+    }
   }
   return {
     multiWorkspace: true,
     workspaces: results,
+    errors: results.flatMap(result => result.errors || []),
     run: {
       seen: results.reduce((sum, result) => sum + (result.run?.seen || 0), 0),
       refreshed: results.reduce((sum, result) => sum + (result.run?.refreshed || 0), 0),
       skipped: results.reduce((sum, result) => sum + (result.run?.skipped || 0), 0),
       pruned: results.reduce((sum, result) => sum + (result.run?.pruned || 0), 0),
       errors: results.reduce((sum, result) => sum + (result.run?.errors || 0), 0),
+      failedWorkspaces: results.filter(result => result.failed).length,
+      discoveryComplete: results.every(result => result.run?.discoveryComplete !== false),
     },
   };
+}
+
+async function assertUniqueWorkspaceOutputs(workspaces) {
+  const seen = new Map();
+  for (const workspace of workspaces) {
+    const output = await withWorkspaceToken(workspace, () => resolveMirrorOutDir(workspace.config));
+    const safeOutDir = resolveSafePath(output.outDir, { mode: 'write' });
+    const previous = seen.get(safeOutDir);
+    if (previous) {
+      throw new Error(`Workspace output folder collision: "${previous}" and "${workspace.name}" both resolve to ${safeOutDir}`);
+    }
+    seen.set(safeOutDir, workspace.name);
+  }
 }
 
 function mirrorStatus(config, options = {}) {
@@ -884,7 +975,7 @@ function resolveFailureOutput(config, options = {}) {
   const discovered = discoverManifestDirs(config);
   if (discovered.length === 1) return discovered[0];
 
-  const workspaceFolder = config.workspaceFolder ?? 'auto';
+  const workspaceFolder = configuredWorkspaceFolder(config);
   if (workspaceFolder && workspaceFolder !== 'auto') return localOutputForWorkspaceFolder(config, workspaceFolder);
   if (workspaceFolder === false || workspaceFolder === null || workspaceFolder === 'none') {
     return localOutputForWorkspaceFolder(config, 'none');
@@ -931,7 +1022,7 @@ async function recordSyncFailure(config, options, error) {
 
 async function resolveMirrorOutDir(config) {
   const baseOutDir = configuredOutDir(config);
-  const workspaceFolder = config.workspaceFolder ?? 'auto';
+  const workspaceFolder = configuredWorkspaceFolder(config);
 
   if (workspaceFolder === false || workspaceFolder === null || workspaceFolder === 'none') {
     return {
@@ -1246,6 +1337,7 @@ async function main() {
     } else {
       logSyncResults(results, options);
     }
+    if (results.run?.failedWorkspaces > 0) process.exitCode = 1;
   } catch (error) {
     if (config && !options?.report && !error.skipFailureRecord) {
       try {
@@ -1279,9 +1371,11 @@ if (require.main === module) {
       loadEnvFile,
       logSyncResults,
       withWorkspaceToken,
+      configuredWorkspaceFolder,
       acquireSyncLock,
       syncLockPath,
       workspaceConfigs,
+      assertUniqueWorkspaceOutputs,
     },
   };
 }

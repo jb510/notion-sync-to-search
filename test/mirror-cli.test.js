@@ -187,6 +187,35 @@ test('single workspace config preserves tokenEnv', () => {
   assert.equal(workspaces[0].tokenEnv, 'NOTION_API_KEY_WORK');
 });
 
+test('workspace outFolder aliases workspaceFolder', () => {
+  const workspaces = _internal.workspaceConfigs({
+    outDir: 'notion-sync-read-only',
+    workspaces: [
+      { name: 'Business', outFolder: 'Walden Business', tokenEnv: 'NOTION_API_KEY_WORK' },
+    ],
+  });
+  assert.equal(workspaces.length, 1);
+  assert.equal(_internal.configuredWorkspaceFolder(workspaces[0].config), 'Walden Business');
+  assert.equal(workspaces[0].config.workspaceFolder, 'Walden Business');
+});
+
+test('multi-workspace output folders must be unique', async () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const workspaces = _internal.workspaceConfigs({
+    outDir: path.join(dir, 'mirror'),
+    workspaces: [
+      { name: 'Business', workspaceFolder: 'Same', tokenEnv: 'NOTION_API_KEY_WORK' },
+      { name: 'Personal', outFolder: 'Same', tokenEnv: 'NOTION_API_KEY_PERSONAL' },
+    ],
+  });
+
+  await assert.rejects(
+    () => _internal.assertUniqueWorkspaceOutputs(workspaces),
+    /output folder collision/,
+  );
+});
+
 test('default selected page paths include page id to avoid title collisions', () => {
   const pageA = { id: '11111111-1111-1111-1111-111111111111', properties: { Name: { type: 'title', title: [{ plain_text: 'Same Title' }] } } };
   const pageB = { id: '22222222-2222-2222-2222-222222222222', properties: { Name: { type: 'title', title: [{ plain_text: 'Same Title' }] } } };
@@ -519,4 +548,33 @@ test('normal sync result output omits per-page refreshed noise unless verbose', 
   _internal.logSyncResults(results, { verbose: true });
   assert.match(lines.join('\n'), /- refreshed Page 0/);
   assert.match(lines.join('\n'), /- pruned Old Page/);
+});
+
+test('multi-workspace sync result output includes per-workspace summaries', () => {
+  const lines = [];
+  const originalLog = console.log;
+  test.after(() => { console.log = originalLog; });
+  console.log = line => lines.push(String(line));
+
+  _internal.logSyncResults({
+    multiWorkspace: true,
+    workspaces: [
+      { name: 'Business', run: { seen: 2, refreshed: 1, skipped: 1, pruned: 0, errors: 0 } },
+      { name: 'Personal', failed: true, error: 'No Notion API token found', run: { seen: 0, refreshed: 0, skipped: 0, pruned: 0, errors: 1, failed: true } },
+    ],
+    errors: [{ title: 'Personal', error: 'No Notion API token found' }],
+    run: {
+      seen: 2,
+      refreshed: 1,
+      skipped: 1,
+      pruned: 0,
+      errors: 1,
+      failedWorkspaces: 1,
+    },
+  });
+
+  const output = lines.join('\n');
+  assert.match(output, /Workspace Business: seen=2 refreshed=1 skipped=1 pruned=0 errors=0/);
+  assert.match(output, /Workspace Personal: seen=0 refreshed=0 skipped=0 pruned=0 errors=1 failed=yes/);
+  assert.match(output, /Failed workspaces: 1/);
 });

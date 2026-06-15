@@ -114,6 +114,21 @@ function readConfigIfPresent(configPath) {
   }
 }
 
+function schedulerNodePath() {
+  const stableCandidates = process.platform === 'darwin'
+    ? ['/opt/homebrew/bin/node', '/usr/local/bin/node']
+    : ['/usr/bin/node', '/usr/local/bin/node'];
+  for (const candidate of stableCandidates) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch (_) {
+      // Keep looking for a stable executable before falling back.
+    }
+  }
+  return process.execPath;
+}
+
 function buildContext(options) {
   const stateDir = options.stateDir ? path.resolve(expandHome(options.stateDir)) : null;
   const workdir = stateDir || process.cwd();
@@ -124,7 +139,7 @@ function buildContext(options) {
   const config = readConfigIfPresent(configPath);
   const configuredEvery = parsePositiveInt(config?.sync?.intervalMinutes, DEFAULT_EVERY_MINUTES);
   const scriptPath = path.resolve(__dirname, 'mirror-config.js');
-  const nodePath = process.execPath;
+  const nodePath = schedulerNodePath();
   const logDir = options.logDir ? path.resolve(expandHome(options.logDir)) : path.join(workdir, 'logs');
   const logPath = path.join(logDir, options.report ? 'notion-sync-to-search-report.log' : 'notion-sync-to-search.log');
   const envFile = options.envFile ? path.resolve(expandHome(options.envFile)) : (stateDir ? path.join(stateDir, '.env') : null);

@@ -67,7 +67,7 @@ With `workspaceFolder: "auto"`, the mirror calls `GET /v1/users/me` and uses the
 notion-sync-read-only/<Notion workspace name>/
 ```
 
-If a user has two Notion workspaces, run this skill once per workspace token/config. Each workspace lands in its own subfolder when the workspace names differ. If two workspaces have the same display name, set `workspaceFolder` to a custom folder name in one config.
+If a user has two Notion workspaces, configure `workspaces[]` with a token env var and output folder per workspace. Each workspace lands in its own subfolder. If two workspaces have the same display name, set `outFolder` or `workspaceFolder` to a custom folder name in one config.
 
 ## Normal Operation
 
@@ -83,7 +83,7 @@ Then schedule recurring refresh:
 node scripts/install-scheduler.js --state-dir ~/.openclaw
 ```
 
-By default, `install-scheduler.js` reads `sync.intervalMinutes` from `<state>/config/notion-search-mirror.json`, then prints the launchd/systemd files and activation commands for the host. Use `--mode install` if you want it to write the scheduler files for you. The generated scheduler passes `<state>/.env` to `mirror-config.js --env-file`; it does not shell-source `.env`. Keep `NOTION_API_KEY` there instead of copying it into agent workspaces.
+By default, `install-scheduler.js` reads `sync.intervalMinutes` from `<state>/config/notion-search-mirror.json`, then prints the launchd/systemd files and activation commands for the host. Use `--mode install` if you want it to write the scheduler files for you. The generated scheduler passes `<state>/.env` to `mirror-config.js --env-file`; it does not shell-source `.env`. Keep `NOTION_API_KEY` and any workspace-specific token variables there instead of copying them into agent workspaces. On macOS, the scheduler uses the stable Homebrew Node path (`/opt/homebrew/bin/node` or `/usr/local/bin/node`) when available so launchd jobs do not break after a Node version upgrade.
 
 Override the config interval for one scheduler generation with:
 
@@ -295,19 +295,43 @@ Optional search index freshness checks compare an index marker file mtime to the
 }
 ```
 
-Multiple workspaces can be configured in one file. Each entry may name a different token env var:
+Multiple workspaces can be configured in one file. Each entry may name a different token env var and output folder:
 
 ```json
 {
   "outDir": "notion-sync-read-only",
   "workspaces": [
-    { "name": "Work", "workspaceFolder": "Work", "tokenEnv": "NOTION_API_KEY_WORK" },
-    { "name": "Personal", "workspaceFolder": "Personal", "tokenEnv": "NOTION_API_KEY_PERSONAL" }
+    {
+      "name": "Walden Business",
+      "tokenEnv": "NOTION_API_KEY",
+      "outFolder": "Walden",
+      "syncScope": "integration-visible-workspace"
+    },
+    {
+      "name": "Joanna Personal",
+      "tokenEnv": "NOTION_API_KEY_PERSONAL",
+      "outFolder": "Joanna Workflow",
+      "syncScope": "integration-visible-workspace"
+    }
   ]
 }
 ```
 
-When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`.
+When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`. `outFolder` is the preferred field name for multi-workspace configs; `workspaceFolder` remains accepted for older configs. The script refuses to sync if two workspaces resolve to the same output folder.
+
+The output remains separated under one read-only mirror root:
+
+```text
+notion-sync-read-only/
+  Walden/
+    .notion-search-mirror.json
+    ...
+  Joanna Workflow/
+    .notion-search-mirror.json
+    ...
+```
+
+Privacy depends on OpenClaw search paths. An agent pointed at `notion-sync-read-only` can search every workspace under that root. An agent that should see only business knowledge should point at `notion-sync-read-only/Walden` instead.
 
 To generate scheduler files for a daily or weekly report:
 

@@ -242,7 +242,7 @@ Scheduled refresh is the expected steady-state workflow. Use the scheduler helpe
 node {baseDir}/scripts/install-scheduler.js --state-dir /absolute/path/to/openclaw-state
 ```
 
-By default it reads `sync.intervalMinutes` from `<state>/config/notion-search-mirror.json`, then prints launchd/systemd files and activation commands for the host. Use `--mode install` only when the user wants the helper to write scheduler files. The scheduler helper does not store `NOTION_API_KEY`; it passes the install-level `<state>/.env` to `mirror-config.js --env-file`. The sync script parses `.env` itself and does not shell-source it.
+By default it reads `sync.intervalMinutes` from `<state>/config/notion-search-mirror.json`, then prints launchd/systemd files and activation commands for the host. Use `--mode install` only when the user wants the helper to write scheduler files. The scheduler helper does not store `NOTION_API_KEY`; it passes the install-level `<state>/.env` to `mirror-config.js --env-file`. The sync script parses `.env` itself and does not shell-source it. On macOS, the scheduler uses the stable Homebrew Node path (`/opt/homebrew/bin/node` or `/usr/local/bin/node`) when available so launchd jobs do not break after a Node version upgrade.
 
 On Linux OpenClaw containers, prefer a system-level systemd timer:
 
@@ -396,9 +396,31 @@ Use `searchIndex.freshnessFile` when the local search backend can touch a marker
 }
 ```
 
-For multiple Notion workspaces in one config, use `workspaces[]` with optional `tokenEnv` fields.
+For multiple Notion workspaces in one config, use `workspaces[]` with a `tokenEnv` and output folder per workspace:
 
-When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`.
+```json
+{
+  "outDir": "notion-sync-read-only",
+  "workspaces": [
+    {
+      "name": "Walden Business",
+      "tokenEnv": "NOTION_API_KEY",
+      "outFolder": "Walden",
+      "syncScope": "integration-visible-workspace"
+    },
+    {
+      "name": "Joanna Personal",
+      "tokenEnv": "NOTION_API_KEY_PERSONAL",
+      "outFolder": "Joanna Workflow",
+      "syncScope": "integration-visible-workspace"
+    }
+  ]
+}
+```
+
+When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`. `outFolder` is the preferred field name for multi-workspace configs; `workspaceFolder` remains accepted for older configs. The script refuses to sync if two workspaces resolve to the same output folder.
+
+Privacy depends on OpenClaw search paths. An agent pointed at `notion-sync-read-only` can search every workspace under that root. An agent that should see only business knowledge should point at `notion-sync-read-only/Walden` instead.
 
 OpenClaw memory/search will see mirror changes according to the active backend's normal indexing behavior. If search results still look stale, refresh/reindex/restart that memory backend as appropriate for the install.
 
