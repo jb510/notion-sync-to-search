@@ -21,6 +21,7 @@ This skill exists because Notion is good as a canonical workspace, but local Ope
 4. **Use mirrored markdown only for search, recall, citation, and page discovery.**
 5. **When a search hit comes from the mirror, use its frontmatter to identify the live Notion page and edit Notion directly.**
 6. **Keep scheduled refresh enabled so local search catches up after Notion edits.**
+7. **Every Notion touch must produce a receipt with a live Notion link.**
 
 The preferred OpenClaw install layout is one shared managed skill and one shared mirror per OpenClaw state directory:
 
@@ -65,6 +66,27 @@ The folder names are intentional. The root identifies the generated mirror, and 
 - Secretly crawling Notion pages that are not shared with the integration.
 
 If you need to create or edit Notion content, use the bundled `notion` skill or direct Notion API tools. Scheduled refresh will pull those changes into the local mirror.
+
+## Receipt Policy
+
+Whenever you use Notion content in any way, include a concise receipt in the user-facing response. This applies to:
+
+- Search hits from `notion-sync-read-only/`.
+- Reading or summarizing a mirrored Notion page.
+- Creating a live Notion page.
+- Editing or appending to a live Notion page.
+- Failed live Notion attempts.
+
+Receipt format:
+
+```text
+Notion receipt:
+- Action: searched/read/created/edited/failed
+- Page: <title>
+- Link: <live Notion URL>
+```
+
+For mirror search/read results, use the mirrored file frontmatter `notion_url`. For live create/edit API responses, use the returned `url`; if the API response does not include a URL, construct or reuse the URL from the mirror/frontmatter. If multiple pages are relevant, include one receipt item per page. If a live write fails, include the target page URL and a short reason.
 
 ## Live Edit Token Routing
 

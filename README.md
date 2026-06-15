@@ -26,6 +26,7 @@ That makes the skill and mirror available to all agents in one OpenClaw install 
 - Edits go to Notion directly.
 - Scheduled refresh is the normal operating path.
 - In multi-workspace installs, live edits must use the token configured for the target mirror workspace.
+- Every user-facing Notion search, read, create, edit, or failed edit should include a receipt with a live Notion link.
 
 ## Quick start
 
@@ -140,6 +141,21 @@ It reports the workspace, mirror folder, source page, and `Token env`. Use that 
 - `curl` or scripts: use the selected token as `Authorization: Bearer ...`.
 
 This keeps privacy boundaries explicit: shared business pages use the business integration, and personal workflow pages use the personal integration.
+
+## Receipts
+
+Every time OpenClaw touches Notion content, the user-facing response should include a concise receipt with a live Notion link. This includes local mirror search hits, reading/summarizing mirrored pages, live page creation, live edits/appends, and failed live edit attempts.
+
+Use this shape:
+
+```text
+Notion receipt:
+- Action: searched/read/created/edited/failed
+- Page: <title>
+- Link: <live Notion URL>
+```
+
+For mirror results, take the URL from frontmatter `notion_url`. For live creates/edits, use the Notion API response `url` when available. For failures, include the intended target page URL and the short reason.
 
 Manual full reconciliation refetches every currently visible page, rewrites its markdown, and prunes stale manifest entries:
 
