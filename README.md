@@ -27,6 +27,7 @@ That makes the skill and mirror available to all agents in one OpenClaw install 
 - Scheduled refresh is the normal operating path.
 - In multi-workspace installs, live edits must use the token configured for the target mirror workspace.
 - Every user-facing Notion search, read, create, edit, or failed edit should include a receipt with a live Notion link.
+- Follow document continuity: edit the referenced existing Notion page unless the user explicitly asks for a new page.
 
 ## Quick start
 
@@ -125,6 +126,10 @@ Normal sync output is summary-only so scheduled incremental runs stay readable. 
 ## Live Edits After Search Hits
 
 If an agent finds a page through the local mirror, resolve the correct live Notion token before creating or editing anything under that page. Do not assume the default `NOTION_API_KEY` is correct: a multi-workspace config can use `NOTION_API_KEY` for shared/business pages and `NOTION_API_KEY_PERSONAL` or another configured `tokenEnv` for personal pages.
+
+For follow-up edits, use the existing target page. If the user first asks to create `Research Proposal` and later says "change paragraph 2" or "add a budget section", edit that same Notion page. Do not create a new sibling page unless the user explicitly asks for a new version or separate document.
+
+If the target page is not obvious, ask a short clarification before writing. If several pages match the title, ask which one. If no page matches an edit request, ask for the intended page instead of creating one.
 
 Use the resolver:
 

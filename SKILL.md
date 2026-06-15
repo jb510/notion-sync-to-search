@@ -22,6 +22,7 @@ This skill exists because Notion is good as a canonical workspace, but local Ope
 5. **When a search hit comes from the mirror, use its frontmatter to identify the live Notion page and edit Notion directly.**
 6. **Keep scheduled refresh enabled so local search catches up after Notion edits.**
 7. **Every Notion touch must produce a receipt with a live Notion link.**
+8. **Follow document continuity: edit the referenced existing Notion page unless the user explicitly asks for a new page.**
 
 The preferred OpenClaw install layout is one shared managed skill and one shared mirror per OpenClaw state directory:
 
@@ -66,6 +67,31 @@ The folder names are intentional. The root identifies the generated mirror, and 
 - Secretly crawling Notion pages that are not shared with the integration.
 
 If you need to create or edit Notion content, use the bundled `notion` skill or direct Notion API tools. Scheduled refresh will pull those changes into the local mirror.
+
+## Document Continuity
+
+When a user asks for a follow-up change to a Notion document, assume they mean the same existing document unless they explicitly ask to create a new independent page.
+
+Examples:
+
+- User: "Create a document called Research Proposal."  
+  Action: create one live Notion page named `Research Proposal`; keep its page ID/URL in the active context and receipt.
+- User later: "Change paragraph 2 to be different."  
+  Action: edit paragraph 2 inside the existing `Research Proposal` page. Do not create `Research Proposal revised`, `Research Proposal update`, or any new sibling page.
+- User: "Add a budget section to that."  
+  Action: append/edit the existing referenced page.
+- User: "Make a new version" or "Create a separate revised document."  
+  Action: create a new page only because the user explicitly asked for a new page/version.
+
+Resolution order for edits:
+
+1. Use the most recent Notion receipt/page URL in the active conversation when the user says "it", "that", "the document", or refers to a recent title.
+2. If the user names a page, search the mirror and/or live Notion for that exact title.
+3. If exactly one likely page matches, edit that page.
+4. If multiple likely pages match, ask where it should go before writing.
+5. If no page matches and the user asked to edit/change/update, ask for the target page instead of creating a new one.
+
+For paragraph-level edits, fetch the live page blocks, identify the target paragraph by position or nearby text, and patch that block. Preserve the rest of the page. If the requested paragraph is ambiguous, ask for clarification before writing.
 
 ## Receipt Policy
 
