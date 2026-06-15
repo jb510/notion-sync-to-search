@@ -66,6 +66,34 @@ The folder names are intentional. The root identifies the generated mirror, and 
 
 If you need to create or edit Notion content, use the bundled `notion` skill or direct Notion API tools. Scheduled refresh will pull those changes into the local mirror.
 
+## Live Edit Token Routing
+
+When a search result comes from the mirror, do not assume `NOTION_API_KEY` is the right live-write token. Multi-workspace installs can use different Notion integrations for different mirror folders, for example business pages under one token and personal workflow pages under another.
+
+Before creating or editing a live Notion page discovered from the mirror:
+
+1. Read the mirrored file frontmatter for `notion_page_id` or use the Notion URL.
+2. Resolve the correct token env from the install mirror config:
+
+```bash
+node {baseDir}/scripts/resolve-live-token.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  <notion-page-id-or-url-or-mirrored-file> \
+  --env-file /absolute/path/to/openclaw-state/.env
+```
+
+3. Use the returned `Token env` for the live Notion API call. For `ntn`, export it as `NOTION_API_TOKEN`. For `curl` or direct API scripts, use it in the `Authorization: Bearer ...` header.
+
+Example:
+
+```bash
+TOKEN_ENV="$(node {baseDir}/scripts/resolve-live-token.js "$STATE/config/notion-search-mirror.json" "$PAGE_ID" --env-file "$STATE/.env" --json | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>console.log(JSON.parse(s).tokenEnv))')"
+set -a; . "$STATE/.env"; set +a
+export NOTION_API_TOKEN="${!TOKEN_ENV}"
+```
+
+If the resolver says a page belongs to a personal workspace, use that personal token. Do not fall back to a business token just because it can write somewhere else.
+
 ## Required Metadata
 
 Every mirrored file must include frontmatter like this:

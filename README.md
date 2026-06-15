@@ -25,6 +25,7 @@ That makes the skill and mirror available to all agents in one OpenClaw install 
 - Local markdown is read-only cache for search.
 - Edits go to Notion directly.
 - Scheduled refresh is the normal operating path.
+- In multi-workspace installs, live edits must use the token configured for the target mirror workspace.
 
 ## Quick start
 
@@ -119,6 +120,26 @@ node scripts/mirror-config.js config/notion-search-mirror.json --env-file ~/.ope
 ```
 
 Normal sync output is summary-only so scheduled incremental runs stay readable. Use `--verbose` when debugging and you need per-page refreshed/pruned details.
+
+## Live Edits After Search Hits
+
+If an agent finds a page through the local mirror, resolve the correct live Notion token before creating or editing anything under that page. Do not assume the default `NOTION_API_KEY` is correct: a multi-workspace config can use `NOTION_API_KEY` for shared/business pages and `NOTION_API_KEY_PERSONAL` or another configured `tokenEnv` for personal pages.
+
+Use the resolver:
+
+```bash
+node scripts/resolve-live-token.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  <notion-page-id-or-url-or-mirrored-file> \
+  --env-file /absolute/path/to/openclaw-state/.env
+```
+
+It reports the workspace, mirror folder, source page, and `Token env`. Use that token env for live writes:
+
+- `ntn`: export the selected token as `NOTION_API_TOKEN`.
+- `curl` or scripts: use the selected token as `Authorization: Bearer ...`.
+
+This keeps privacy boundaries explicit: shared business pages use the business integration, and personal workflow pages use the personal integration.
 
 Manual full reconciliation refetches every currently visible page, rewrites its markdown, and prunes stale manifest entries:
 

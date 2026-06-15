@@ -12,6 +12,7 @@ const { _internal: openclawInternal } = require('../scripts/install-openclaw-mem
 const repo = path.resolve(__dirname, '..');
 const cli = path.join(repo, 'scripts', 'mirror-config.js');
 const schedulerCli = path.join(repo, 'scripts', 'install-scheduler.js');
+const resolverCli = path.join(repo, 'scripts', 'resolve-live-token.js');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(repo, '.tmp-test-'));
@@ -33,6 +34,51 @@ function runFailure(args, options = {}) {
   }
   throw new Error('Expected command to fail');
 }
+
+function runResolver(args, options = {}) {
+  return execFileSync(process.execPath, [resolverCli, ...args], {
+    cwd: repo,
+    encoding: 'utf8',
+    env: { ...process.env, ...options.env },
+  });
+}
+
+test('live token resolver maps mirrored page to workspace tokenEnv', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outDir = path.join(dir, 'mirror');
+  const personalDir = path.join(outDir, 'Personal');
+  fs.mkdirSync(personalDir, { recursive: true });
+  const pageId = '374bb4fe-9887-8022-a1b0-c4e26975c46a';
+  const configPath = path.join(dir, 'config.json');
+  const envPath = path.join(dir, '.env');
+  fs.writeFileSync(configPath, JSON.stringify({
+    outDir,
+    workspaces: [
+      { name: 'Business', outFolder: 'Business', tokenEnv: 'NOTION_API_KEY' },
+      { name: 'Personal', outFolder: 'Personal', tokenEnv: 'NOTION_API_KEY_PERSONAL' },
+    ],
+  }));
+  fs.writeFileSync(envPath, 'NOTION_API_KEY=ntn_business\nNOTION_API_KEY_PERSONAL=ntn_personal\n');
+  fs.writeFileSync(path.join(personalDir, '.notion-search-mirror.json'), JSON.stringify({
+    generatedBy: 'notion-sync-to-search',
+    pages: {
+      [pageId]: {
+        pageId,
+        title: 'WHISTLER WEEK',
+        url: 'https://app.notion.com/p/WHISTLER-WEEK-374bb4fe98878022a1b0c4e26975c46a',
+        path: 'notion-sync-read-only/Personal/WHISTLER WEEK - 374bb4fe.md',
+      },
+    },
+  }));
+
+  const output = runResolver([configPath, pageId.replace(/-/g, ''), '--env-file', envPath, '--json']);
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.workspaceName, 'Personal');
+  assert.equal(parsed.workspaceFolder, 'Personal');
+  assert.equal(parsed.tokenEnv, 'NOTION_API_KEY_PERSONAL');
+  assert.equal(parsed.tokenAvailable, true);
+});
 
 test('report is local-only and includes pruned pages', () => {
   const dir = tmpdir();
