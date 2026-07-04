@@ -28,6 +28,8 @@ That makes the skill and mirror available to all agents in one OpenClaw install 
 - In multi-workspace installs, live edits must use the token configured for the target mirror workspace.
 - Every user-facing Notion search, read, create, edit, or failed edit should include a receipt with a live Notion link.
 - Follow document continuity: edit the referenced existing Notion page unless the user explicitly asks for a new page.
+- Ask the user where a new/moved Notion page should go when the destination is not explicit or clearly defined by local policy.
+- Use provenance and privacy lint helpers in multi-workspace installs.
 
 ## Quick start
 
@@ -121,6 +123,8 @@ node scripts/mirror-config.js config/notion-search-mirror.json --dry-run
 node scripts/mirror-config.js config/notion-search-mirror.json --env-file ~/.openclaw/.env
 ```
 
+This is also the trigger path for user requests such as "sync notion now" or "refresh Notion now". Run the immediate sync, then report seen/refreshed/skipped/pruned/error counts. Do not send a success message on every scheduled run.
+
 Normal sync output is summary-only so scheduled incremental runs stay readable. Use `--verbose` when debugging and you need per-page refreshed/pruned details.
 
 ## Live Edits After Search Hits
@@ -142,10 +146,36 @@ node scripts/resolve-live-token.js \
 
 It reports the workspace, mirror folder, source page, and `Token env`. Use that token env for live writes:
 
-- `ntn`: export the selected token as `NOTION_API_TOKEN`.
-- `curl` or scripts: use the selected token as `Authorization: Bearer ...`.
+- Preferred: use `curl` or a direct API script with the selected token as `Authorization: Bearer ...`.
+- Optional: use `ntn` only when the user has explicitly installed and authenticated it for that OpenClaw install.
 
 This keeps privacy boundaries explicit: shared business pages use the business integration, and personal workflow pages use the personal integration.
+
+For a fuller receipt/provenance lookup, use:
+
+```bash
+node scripts/provenance.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  <page-id-or-url-or-mirrored-file-or-search-text> \
+  --env-file /absolute/path/to/openclaw-state/.env
+```
+
+It reports the matching live Notion URL, page title, workspace, mirror folder, correct `tokenEnv`, mirror file path, and receipt fields. If it returns multiple likely matches, ask the user which page to use before writing.
+
+## Location Confirmation UX
+
+When a user asks to create, move, or file something in Notion and the destination is not obvious, ask before writing. Prefer a compact multiple-choice prompt:
+
+```text
+Where should I put this in Notion?
+
+1. <Most likely page/database> - <why this fits>
+2. <Second likely page/database> - <why this fits>
+3. <Inbox/triage location> - sort it later
+4. Another location - send a page/database name or link
+```
+
+Use local agent/install policy first. If policy gives a clear canonical destination, use it. If there are multiple plausible destinations, do not guess silently.
 
 ## Receipts
 
@@ -375,6 +405,45 @@ notion-sync-read-only/
 
 Privacy depends on OpenClaw search paths. An agent pointed at `notion-sync-read-only` can search every workspace under that root. An agent that should see only business knowledge should point at `notion-sync-read-only/Walden` instead.
 
+Run privacy lint after configuring multi-workspace mirrors:
+
+```bash
+node scripts/privacy-lint.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  --openclaw-config /absolute/path/to/openclaw-state/openclaw.json
+```
+
+It is read-only and flags risky search paths, especially when a personal/private workspace is mirrored but OpenClaw indexes the broad `notion-sync-read-only` root.
+
+## Freshness Smoke Alerts
+
+Use `sync-smoke.js` for a transition-only stale monitor:
+
+```bash
+node scripts/sync-smoke.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  --max-age-hours 24 \
+  --main-channel main
+```
+
+It alerts only on state changes:
+
+- first stale check after the mirror has not completed successfully in 24 hours
+- first recovered check after syncing resumes
+
+It does not emit an alert for every successful sync. The optional `--post-command <cmd>` runs only on stale/recovered transitions with `NOTION_SYNC_ALERT_MESSAGE` set in the environment, so an install-specific monitor can post the message to the main Discord/OpenClaw channel without this skill hard-coding a Discord transport.
+
+Generate a recurring smoke timer with:
+
+```bash
+node scripts/install-scheduler.js \
+  --state-dir /absolute/path/to/openclaw-state \
+  --smoke \
+  --mode install
+```
+
+The smoke timer reads `smoke.intervalMinutes`, defaults to hourly, and writes `logs/notion-sync-to-search-smoke.log`.
+
 To generate scheduler files for a daily or weekly report:
 
 ```bash
@@ -461,6 +530,9 @@ Use the correct absolute/workspace-relative path for your OpenClaw install.
 - `scripts/mirror-config.js` - pull configured pages/databases or integration-visible workspace results
 - `scripts/install-scheduler.js` - print or install launchd/systemd/cron scheduler entries
 - `scripts/install-openclaw-memory.js` - wire the mirror into OpenClaw memory/search config
+- `scripts/provenance.js` - trace a mirrored search hit back to the live Notion page, workspace, URL, receipt, and token env
+- `scripts/privacy-lint.js` - read-only lint for multi-workspace privacy/search-path mistakes
+- `scripts/sync-smoke.js` - transition-only stale/recovered sync freshness monitor
 - `scripts/search-notion.js` - live Notion title/object search
 - `scripts/query-database.js` - query a Notion database/data source
 - `scripts/get-database-schema.js` - inspect database schema

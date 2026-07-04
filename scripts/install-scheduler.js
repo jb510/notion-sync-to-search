@@ -20,12 +20,13 @@ const DEFAULT_NAME = 'notion-sync-to-search';
 const DEFAULT_EVERY_MINUTES = 60;
 
 function usage(exitCode = 0) {
-  console.log('Usage: install-scheduler.js [--config <path>] [--state-dir <path>] [--every <minutes>] [--name <name>] [--env-file <path>] [--log-dir <path>] [--systemd-scope user|system] [--report] [--days <n>] [--mode print|install] [--json]');
+  console.log('Usage: install-scheduler.js [--config <path>] [--state-dir <path>] [--every <minutes>] [--name <name>] [--env-file <path>] [--log-dir <path>] [--systemd-scope user|system] [--report|--smoke] [--days <n>] [--mode print|install] [--json]');
   console.log('');
   console.log('Examples:');
   console.log('  install-scheduler.js --state-dir /root/.openclaw --systemd-scope system --mode install');
   console.log('  install-scheduler.js --state-dir /Users/walden/OpenClaw/anastasia/state --name notion-sync-to-search-anastasia --mode install');
   console.log('  install-scheduler.js --config config/notion-search-mirror.json --every 240');
+  console.log('  install-scheduler.js --state-dir ~/.openclaw --smoke --mode install');
   process.exit(exitCode);
 }
 
@@ -44,6 +45,7 @@ function parseArgs(argv) {
     systemdScope: 'user',
     mode: 'print',
     report: false,
+    smoke: false,
     reportDays: 7,
   };
 
@@ -58,10 +60,13 @@ function parseArgs(argv) {
     else if (arg === '--log-dir' && args[i + 1]) options.logDir = args[++i];
     else if (arg === '--systemd-scope' && args[i + 1]) options.systemdScope = parseSystemdScope(args[++i]);
     else if (arg === '--report') options.report = true;
+    else if (arg === '--smoke') options.smoke = true;
     else if (arg === '--days' && args[i + 1]) options.reportDays = parsePositiveInt(args[++i], 7);
     else if (arg === '--mode' && args[i + 1]) options.mode = parseMode(args[++i]);
     else throw new Error(`Unknown or incomplete argument: ${arg}`);
   }
+
+  if (options.report && options.smoke) throw new Error('--report and --smoke are mutually exclusive');
 
   return options;
 }
@@ -137,21 +142,25 @@ function buildContext(options) {
     : options.configPath;
   const configPath = resolveSafePath(configCandidate, { mode: 'read' });
   const config = readConfigIfPresent(configPath);
-  const configuredEvery = parsePositiveInt(config?.sync?.intervalMinutes, DEFAULT_EVERY_MINUTES);
-  const scriptPath = path.resolve(__dirname, 'mirror-config.js');
+  const configuredEvery = options.smoke
+    ? parsePositiveInt(config?.smoke?.intervalMinutes, DEFAULT_EVERY_MINUTES)
+    : parsePositiveInt(config?.sync?.intervalMinutes, DEFAULT_EVERY_MINUTES);
+  const scriptPath = path.resolve(__dirname, options.smoke ? 'sync-smoke.js' : 'mirror-config.js');
   const nodePath = schedulerNodePath();
   const logDir = options.logDir ? path.resolve(expandHome(options.logDir)) : path.join(workdir, 'logs');
-  const logPath = path.join(logDir, options.report ? 'notion-sync-to-search-report.log' : 'notion-sync-to-search.log');
+  const logPath = path.join(logDir, options.smoke ? 'notion-sync-to-search-smoke.log' : (options.report ? 'notion-sync-to-search-report.log' : 'notion-sync-to-search.log'));
   const envFile = options.envFile ? path.resolve(expandHome(options.envFile)) : (stateDir ? path.join(stateDir, '.env') : null);
-  const baseCommandArgs = options.report
+  const baseCommandArgs = options.smoke
+    ? [scriptPath, configPath]
+    : options.report
     ? [scriptPath, configPath, '--report', '--days', String(options.reportDays)]
     : [scriptPath, configPath];
-  const commandArgs = envFile ? [...baseCommandArgs, '--env-file', envFile] : baseCommandArgs;
+  const commandArgs = envFile && !options.smoke ? [...baseCommandArgs, '--env-file', envFile] : baseCommandArgs;
 
   return {
     ...options,
     stateDir,
-    name: options.report && !options.nameSetByCli ? `${options.name}-report` : options.name,
+    name: !options.nameSetByCli && options.smoke ? `${options.name}-smoke` : (options.report && !options.nameSetByCli ? `${options.name}-report` : options.name),
     everyMinutes: options.everySetByCli ? options.everyMinutes : configuredEvery,
     workdir,
     configPath,

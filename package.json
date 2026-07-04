@@ -11,7 +11,10 @@
     "notion-mirror-page": "scripts/mirror-page.js",
     "notion-mirror-config": "scripts/mirror-config.js",
     "notion-install-scheduler": "scripts/install-scheduler.js",
-    "notion-install-openclaw-memory": "scripts/install-openclaw-memory.js"
+    "notion-install-openclaw-memory": "scripts/install-openclaw-memory.js",
+    "notion-provenance": "scripts/provenance.js",
+    "notion-privacy-lint": "scripts/privacy-lint.js",
+    "notion-sync-smoke": "scripts/sync-smoke.js"
   },
   "scripts": {
     "test": "node --test"

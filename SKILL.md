@@ -23,6 +23,8 @@ This skill exists because Notion is good as a canonical workspace, but local Ope
 6. **Keep scheduled refresh enabled so local search catches up after Notion edits.**
 7. **Every Notion touch must produce a receipt with a live Notion link.**
 8. **Follow document continuity: edit the referenced existing Notion page unless the user explicitly asks for a new page.**
+9. **When location is unclear, ask before creating or moving a Notion page.**
+10. **Use provenance and privacy helpers before live writes in multi-workspace installs.**
 
 The preferred OpenClaw install layout is one shared managed skill and one shared mirror per OpenClaw state directory:
 
@@ -93,6 +95,39 @@ Resolution order for edits:
 
 For paragraph-level edits, fetch the live page blocks, identify the target paragraph by position or nearby text, and patch that block. Preserve the rest of the page. If the requested paragraph is ambiguous, ask for clarification before writing.
 
+## Notion Location Confirmation
+
+When the user asks to create, move, or file a Notion document and the destination is not explicit or strongly implied by local policy, ask a short confirmation before writing.
+
+Good confirmation shape:
+
+```text
+I can put this in Notion. Which location should I use?
+
+1. <Most likely page/database> - <why this fits>
+2. <Second likely page/database> - <why this fits>
+3. <Inbox/triage location> - use this if it needs sorting later
+4. Another location - send me the page/database name or link
+```
+
+Rules:
+
+- Offer 2-3 concrete choices when possible, plus an explicit free-form option.
+- Include live Notion page/database links in the choices when you have them.
+- If local policy defines a clear default, say where you will put it and why, then ask only when risk remains.
+- Do not create a new top-level page/database just because search found no obvious home.
+- If the user already named a destination page/database, use it after resolving the correct live token.
+
+If the user says "sync notion now", "refresh Notion", or "update the Notion mirror", run an immediate mirror refresh:
+
+```bash
+node {baseDir}/scripts/mirror-config.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  --env-file /absolute/path/to/openclaw-state/.env
+```
+
+Return the seen/refreshed/skipped/pruned/error counts and include any page-level errors. Do not treat manual sync as a replacement for the scheduler.
+
 ## Receipt Policy
 
 Whenever you use Notion content in any way, include a concise receipt in the user-facing response. This applies to:
@@ -130,17 +165,86 @@ node {baseDir}/scripts/resolve-live-token.js \
   --env-file /absolute/path/to/openclaw-state/.env
 ```
 
-3. Use the returned `Token env` for the live Notion API call. For `ntn`, export it as `NOTION_API_TOKEN`. For `curl` or direct API scripts, use it in the `Authorization: Bearer ...` header.
+3. Use the returned `Token env` for the live Notion API call. Prefer `curl` or a small direct API script that sends the selected token in the `Authorization: Bearer ...` header. Do not rely on the `ntn` CLI unless the user has explicitly installed and authenticated it for this OpenClaw install.
 
 Example:
 
 ```bash
 TOKEN_ENV="$(node {baseDir}/scripts/resolve-live-token.js "$STATE/config/notion-search-mirror.json" "$PAGE_ID" --env-file "$STATE/.env" --json | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>console.log(JSON.parse(s).tokenEnv))')"
 set -a; . "$STATE/.env"; set +a
-export NOTION_API_TOKEN="${!TOKEN_ENV}"
+curl -sS "https://api.notion.com/v1/pages/$PAGE_ID" \
+  -H "Authorization: Bearer ${!TOKEN_ENV}" \
+  -H "Notion-Version: ${NOTION_VERSION:-2026-03-11}" \
+  -H "Content-Type: application/json"
 ```
 
 If the resolver says a page belongs to a personal workspace, use that personal token. Do not fall back to a business token just because it can write somewhere else.
+
+## Provenance Helper
+
+Use the provenance helper when a Notion-related search hit needs to become a live read/write, when multiple workspaces are configured, or when a receipt needs to be reconstructed from a mirrored markdown file:
+
+```bash
+node {baseDir}/scripts/provenance.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  <page-id-or-url-or-mirrored-file-or-search-text> \
+  --env-file /absolute/path/to/openclaw-state/.env
+```
+
+It reports:
+
+- live Notion page ID and URL
+- workspace name and mirror folder
+- correct live-write token env
+- last edited/mirrored timestamps when available
+- mirror file paths
+- receipt text
+
+If it returns multiple matches, choose the exact page only when the title/path/context is unambiguous. Otherwise ask the user which Notion page to use before writing.
+
+## Privacy Lint
+
+Before enabling a multi-workspace mirror for agents, run:
+
+```bash
+node {baseDir}/scripts/privacy-lint.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  --openclaw-config /absolute/path/to/openclaw-state/openclaw.json
+```
+
+The lint is read-only. It warns when a multi-workspace mirror is indexed as one broad root such as `notion-sync-read-only` even though one workspace appears personal/private. Privacy-sensitive agents should point at explicit workspace folders, for example `notion-sync-read-only/Walden`, not the entire mirror root.
+
+## Sync Smoke
+
+Use the stateful smoke check for monitoring freshness:
+
+```bash
+node {baseDir}/scripts/sync-smoke.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  --max-age-hours 24 \
+  --main-channel main
+```
+
+Behavior:
+
+- Alerts only when the mirror first becomes stale.
+- Alerts again only when the mirror first recovers.
+- Does not send a message for every successful sync.
+- Default stale threshold is 24 hours.
+- The state file defaults to `<outDir>/.notion-sync-smoke-state.json`.
+
+For host monitoring, pass `--post-command <cmd>` if there is a local command that posts `NOTION_SYNC_ALERT_MESSAGE` to the install's main Discord/OpenClaw channel. The message includes the stale workspace folders, last completed sync timestamps, page counts, error counts, manifest paths, and the recommended action.
+
+Install a recurring smoke timer with:
+
+```bash
+node {baseDir}/scripts/install-scheduler.js \
+  --state-dir /absolute/path/to/openclaw-state \
+  --smoke \
+  --mode install
+```
+
+The smoke timer reads `smoke.intervalMinutes`, defaults to hourly, and writes `logs/notion-sync-to-search-smoke.log`.
 
 ## Required Metadata
 

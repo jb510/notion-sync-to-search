@@ -19,6 +19,12 @@
   "searchIndex": {
     "freshnessFile": ""
   },
+  "smoke": {
+    "intervalMinutes": 60,
+    "maxAgeHours": 24,
+    "mainChannel": "main",
+    "postCommand": ""
+  },
   "syncScope": "integration-visible-workspace",
   "workspace": {
     "query": "",

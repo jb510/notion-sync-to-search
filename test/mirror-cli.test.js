@@ -13,6 +13,9 @@ const repo = path.resolve(__dirname, '..');
 const cli = path.join(repo, 'scripts', 'mirror-config.js');
 const schedulerCli = path.join(repo, 'scripts', 'install-scheduler.js');
 const resolverCli = path.join(repo, 'scripts', 'resolve-live-token.js');
+const provenanceCli = path.join(repo, 'scripts', 'provenance.js');
+const privacyLintCli = path.join(repo, 'scripts', 'privacy-lint.js');
+const syncSmokeCli = path.join(repo, 'scripts', 'sync-smoke.js');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(repo, '.tmp-test-'));
@@ -41,6 +44,23 @@ function runResolver(args, options = {}) {
     encoding: 'utf8',
     env: { ...process.env, ...options.env },
   });
+}
+
+function runScript(script, args, options = {}) {
+  return execFileSync(process.execPath, [script, ...args], {
+    cwd: repo,
+    encoding: 'utf8',
+    env: { ...process.env, ...options.env },
+  });
+}
+
+function runScriptFailure(script, args, options = {}) {
+  try {
+    runScript(script, args, options);
+  } catch (error) {
+    return error;
+  }
+  throw new Error('Expected command to fail');
 }
 
 test('live token resolver maps mirrored page to workspace tokenEnv', () => {
@@ -78,6 +98,131 @@ test('live token resolver maps mirrored page to workspace tokenEnv', () => {
   assert.equal(parsed.workspaceFolder, 'Personal');
   assert.equal(parsed.tokenEnv, 'NOTION_API_KEY_PERSONAL');
   assert.equal(parsed.tokenAvailable, true);
+});
+
+test('provenance reports source URL, workspace, receipt, and token env', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outDir = path.join(dir, 'mirror');
+  const waldenDir = path.join(outDir, 'Walden');
+  fs.mkdirSync(waldenDir, { recursive: true });
+  const pageId = '374bb4fe-9887-8022-a1b0-c4e26975c46a';
+  const configPath = path.join(dir, 'config.json');
+  const envPath = path.join(dir, '.env');
+  const mdPath = path.join(waldenDir, 'OPEN CLAW MAIN BRAIN - 374bb4fe.md');
+  fs.writeFileSync(configPath, JSON.stringify({
+    outDir,
+    workspaces: [
+      { name: 'Walden Business', outFolder: 'Walden', tokenEnv: 'NOTION_API_KEY' },
+      { name: 'Joanna Personal', outFolder: 'Joanna Workflow', tokenEnv: 'NOTION_API_KEY_PERSONAL' },
+    ],
+  }));
+  fs.writeFileSync(envPath, 'NOTION_API_KEY=ntn_business\n');
+  fs.writeFileSync(mdPath, `---\nnotion_page_id: "${pageId}"\nnotion_url: "https://example.notion.site/main-brain"\n---\n# OPEN CLAW MAIN BRAIN\n`);
+  fs.writeFileSync(path.join(waldenDir, '.notion-search-mirror.json'), JSON.stringify({
+    generatedBy: 'notion-sync-to-search',
+    pages: {
+      [pageId]: {
+        pageId,
+        title: 'OPEN CLAW MAIN BRAIN',
+        url: 'https://example.notion.site/main-brain',
+        relativePath: 'OPEN CLAW MAIN BRAIN - 374bb4fe.md',
+        notionLastEditedTime: '2026-06-15T12:00:00.000Z',
+      },
+    },
+  }));
+
+  const output = runScript(provenanceCli, [configPath, 'OPEN CLAW MAIN BRAIN', '--env-file', envPath, '--json']);
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.matchCount, 1);
+  assert.equal(parsed.matches[0].workspaceName, 'Walden Business');
+  assert.equal(parsed.matches[0].workspaceFolder, 'Walden');
+  assert.equal(parsed.matches[0].tokenEnv, 'NOTION_API_KEY');
+  assert.equal(parsed.matches[0].tokenAvailable, true);
+  assert.equal(parsed.matches[0].receipt.link, 'https://example.notion.site/main-brain');
+});
+
+test('privacy lint flags multi-workspace root search path', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const configPath = path.join(dir, 'config', 'notion-search-mirror.json');
+  const openclawPath = path.join(dir, 'openclaw.json');
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
+    outDir: path.join(dir, 'notion-sync-read-only'),
+    workspaces: [
+      { name: 'Walden Business', outFolder: 'Walden', tokenEnv: 'NOTION_API_KEY' },
+      { name: 'Joanna Personal', outFolder: 'Joanna Workflow', tokenEnv: 'NOTION_API_KEY_PERSONAL' },
+    ],
+  }));
+  fs.writeFileSync(openclawPath, JSON.stringify({
+    agents: {
+      defaults: {
+        memorySearch: {
+          extraPaths: [path.join(dir, 'notion-sync-read-only')],
+        },
+      },
+    },
+  }));
+
+  const output = runScript(privacyLintCli, [configPath, '--openclaw-config', openclawPath, '--json']);
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.findings.some(finding => finding.code === 'multi-workspace-root-search-path'), true);
+  assert.equal(parsed.findings.some(finding => finding.code === 'multi-workspace-root-search-path' && finding.severity === 'warn'), true);
+
+  const strictError = runScriptFailure(privacyLintCli, [configPath, '--openclaw-config', openclawPath, '--strict', '--json']);
+  const strictParsed = JSON.parse(strictError.stdout);
+  assert.equal(strictParsed.ok, false);
+  assert.equal(strictParsed.findings.some(finding => finding.code === 'multi-workspace-root-search-path' && finding.severity === 'error'), true);
+});
+
+test('sync smoke alerts only on stale and recovered transitions', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outDir = path.join(dir, 'mirror');
+  const workspace = path.join(outDir, 'Work');
+  const configPath = path.join(dir, 'config.json');
+  const stateFile = path.join(dir, 'smoke-state.json');
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({ outDir, workspaceFolder: 'Work' }));
+  fs.writeFileSync(path.join(workspace, '.notion-search-mirror.json'), JSON.stringify({
+    generatedBy: 'notion-sync-to-search',
+    pages: {},
+    lastRun: {
+      completedAt: new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString(),
+      errors: 0,
+    },
+  }));
+
+  const stale = runScriptFailure(syncSmokeCli, [configPath, '--state-file', stateFile, '--max-age-hours', '24', '--json']);
+  const first = JSON.parse(stale.stdout);
+  assert.equal(first.currentStatus, 'stale');
+  assert.equal(first.transition, 'stale');
+  assert.match(first.message, /Notion sync is stale/);
+
+  const stillStale = runScriptFailure(syncSmokeCli, [configPath, '--state-file', stateFile, '--max-age-hours', '24', '--json']);
+  const second = JSON.parse(stillStale.stdout);
+  assert.equal(second.currentStatus, 'stale');
+  assert.equal(second.transition, null);
+  assert.equal(second.message, '');
+
+  fs.writeFileSync(path.join(workspace, '.notion-search-mirror.json'), JSON.stringify({
+    generatedBy: 'notion-sync-to-search',
+    pages: {},
+    lastRun: {
+      completedAt: new Date().toISOString(),
+      errors: 0,
+      refreshed: 1,
+      skipped: 2,
+      pruned: 0,
+    },
+  }));
+  const recovered = runScript(syncSmokeCli, [configPath, '--state-file', stateFile, '--max-age-hours', '24', '--json']);
+  const third = JSON.parse(recovered);
+  assert.equal(third.currentStatus, 'healthy');
+  assert.equal(third.transition, 'recovered');
+  assert.match(third.message, /has recovered/);
 });
 
 test('report is local-only and includes pruned pages', () => {
@@ -562,6 +707,43 @@ test('scheduler helper can generate state-level install plan', () => {
     assert.doesNotMatch(plan.content, /EnvironmentFile=-/);
     assert.match(plan.content, /WorkingDirectory=/);
   }
+});
+
+test('scheduler helper can generate smoke monitor plan', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const state = path.join(dir, 'state');
+  fs.mkdirSync(path.join(state, 'config'), { recursive: true });
+  fs.writeFileSync(path.join(state, 'config', 'notion-search-mirror.json'), JSON.stringify({
+    outDir: path.join(state, 'notion-sync-read-only'),
+    smoke: {
+      intervalMinutes: 30,
+      maxAgeHours: 24,
+    },
+  }));
+
+  const ctx = require('../scripts/install-scheduler.js')._internal.buildContext({
+    configPath: 'config/notion-search-mirror.json',
+    configSetByCli: false,
+    stateDir: state,
+    everyMinutes: null,
+    everySetByCli: false,
+    name: 'notion-sync-to-search',
+    nameSetByCli: false,
+    envFile: null,
+    logDir: null,
+    systemdScope: 'system',
+    mode: 'print',
+    report: false,
+    smoke: true,
+    reportDays: 7,
+  });
+
+  assert.equal(ctx.name, 'notion-sync-to-search-smoke');
+  assert.equal(ctx.everyMinutes, 30);
+  assert.match(ctx.scriptPath, /sync-smoke\.js$/);
+  assert.match(ctx.logPath, /notion-sync-to-search-smoke\.log$/);
+  assert.equal(ctx.commandArgs.includes('--env-file'), false);
 });
 
 test('normal sync result output omits per-page refreshed noise unless verbose', () => {
