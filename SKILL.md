@@ -1,8 +1,6 @@
 ---
 name: notion-sync-to-search
-description: Use Notion as an auxiliary OpenClaw knowledge base by keeping a scheduled local read-only markdown mirror of integration-visible Notion pages for OpenClaw memory/search while keeping Notion as the source of truth. Use when Notion content should be searchable locally, when configuring scheduled Notion mirror refresh, or when tracing a local search hit back to the live Notion page before editing.
-homepage: https://github.com/jb510/notion-sync-to-search
-repository: https://github.com/jb510/notion-sync-to-search
+description: Use Notion as an auxiliary OpenClaw knowledge base with scheduled local read-only mirrors, workspace-aware live CRUD, receipts, and resilient optional Codex Apps Notion routing. Use when searching Notion-derived context, configuring mirror refresh, tracing a search hit to a live page, choosing the correct workspace credential, or recovering from Notion connector/API failures.
 license: MIT-0
 metadata: {"openclaw":{"requires":{"env":["NOTION_API_KEY"],"bins":["node"]},"primaryEnv":"NOTION_API_KEY","env":[{"name":"NOTION_API_KEY","description":"Notion integration token used to read pages and databases shared with the integration.","required":true,"sensitive":true},{"name":"NOTION_VERSION","description":"Optional Notion API version override. Defaults to 2026-03-11.","required":false,"sensitive":false}]}}
 ---
@@ -25,6 +23,7 @@ This skill exists because Notion is good as a canonical workspace, but local Ope
 8. **Follow document continuity: edit the referenced existing Notion page unless the user explicitly asks for a new page.**
 9. **When location is unclear, ask before creating or moving a Notion page.**
 10. **Use provenance and privacy helpers before live writes in multi-workspace installs.**
+11. **Treat Codex Apps Notion as an optional interactive convenience, never as the scheduled sync engine or sole live-write path.**
 
 The preferred OpenClaw install layout is one shared managed skill and one shared mirror per OpenClaw state directory:
 
@@ -33,6 +32,8 @@ The preferred OpenClaw install layout is one shared managed skill and one shared
 <state>/config/notion-search-mirror.json
 <state>/notion-sync-read-only/<Notion workspace name>/
 ```
+
+Keep exactly one discoverable copy at `<state>/skills/notion-sync-to-search`. Store deployment backups outside the `skills/` discovery root, for example `<state>/archives/skills/notion-sync-to-search/<timestamp>`. Never leave `notion-sync-to-search.bak-*`, `old-*`, or another directory containing this skill's `SKILL.md` under `<state>/skills`; persistent sessions can cache that stale base directory and invoke obsolete scripts.
 
 For a default single-user OpenClaw install, `<state>` is usually `~/.openclaw`. For multi-install hosts, use that install's actual state directory.
 
@@ -68,7 +69,46 @@ The folder names are intentional. The root identifies the generated mirror, and 
 - Creating a second source of truth.
 - Secretly crawling Notion pages that are not shared with the integration.
 
-If you need to create or edit Notion content, use the bundled `notion` skill or direct Notion API tools. Scheduled refresh will pull those changes into the local mirror.
+If you need to create or edit Notion content, use the workspace-resolved direct Notion API path by default. The bundled `notion` skill, authenticated `ntn`, or Codex Apps Notion may be convenient interactive surfaces, but they must preserve the same workspace routing and receipt rules. Scheduled refresh will pull live changes into the local mirror.
+
+## Backend Selection and Fallback
+
+Use this order unless the user explicitly requests a particular Notion surface:
+
+1. Search the local mirror first for recall, discovery, and provenance.
+2. Resolve the destination workspace and token with `provenance.js` or `resolve-live-token.js` before live CRUD.
+3. Use the workspace-resolved direct Notion API path for deterministic reads and writes.
+4. Use Codex Apps Notion as an interactive convenience when it is available and its connected workspace is known to match the resolved destination.
+5. If the preferred live surface fails, retry once through the workspace-resolved direct API path when that path has not already failed.
+
+Codex runtimes may expose the connector as `codex_apps.notion.*`; catalog/config diagnostics may identify its namespace as `codex_apps__notion`. These names refer to the same optional connector surface.
+
+Do not use Codex Apps Notion for scheduled mirror refresh, bulk reconciliation, pruning, or unattended sync. Those operations must remain deterministic scripts using the configured per-workspace token environments.
+
+For multi-workspace installs:
+
+- Never infer the connector workspace from the user's identity or from a successful connector call.
+- Never use the connector for a live write unless the target workspace is already unambiguous and verified to match the connector.
+- Verify the match with a known anchor page ID from that workspace's mirror/config: fetch or search for the anchor through the connector and confirm the returned Notion page ID is identical. A workspace display name, connected user identity, or successful call is not proof.
+- Reverify after connector reauthorization or a workspace-link change. If no matching anchor can be confirmed, use the resolved API token.
+- If the connector does not expose an explicit workspace/connection selector, use it only for a verified matching workspace; otherwise use the resolved API token.
+- Do not silently write to a different accessible workspace when the intended workspace is unavailable.
+
+On connector failure, do not immediately tell the user to reauthenticate Notion. Classify the failing surface first:
+
+- `oauth_token_invalid_grant`, `TRIGGER_REAUTHENTICATION`, or connector `UNAUTHORIZED`: the optional Codex Apps connector is stale. Retry through the install-scoped API-token path. Say the connector needs reauthentication only if the user specifically wants that connector restored.
+- Notion API `401`: the selected workspace token is invalid or expired. Name the token environment and workspace without exposing the secret.
+- Notion API `403` or `object_not_found`: the integration usually lacks access to that page/database, the page belongs to another configured workspace, or the wrong workspace token was selected. Resolve provenance and verify Notion sharing.
+- No mirror hit: this is not proof that Notion is disconnected. Check mirror freshness, then perform a live title search with the correct workspace token.
+- Ambiguous workspace or page: ask where the content belongs before writing.
+
+If the connector fails, retry through the resolved direct API path. If the direct API has a transient failure, a connector verified for the same workspace may be used instead. If the direct API has an authentication or permission failure, the verified connector may complete the requested interactive operation, but report that the direct API path is degraded and give the exact repair action. Never fall back across workspaces. After an ambiguous write timeout, inspect for the intended page/change before retrying through another surface so a fallback does not create duplicates. Scheduled mirror sync remains direct-API-only.
+
+If fallback succeeds, complete the requested operation and briefly note which optional path was bypassed or which configured path is degraded. If all safe paths fail, give the user a concise failure receipt naming the failed surface, workspace, target, error category, what was tried, and the exact next action. Never report a generic "Notion needs reauthentication" when only one optional connector failed.
+
+For create operations, resolve the parent page/database workspace and token before creating the page. Retain that resolved workspace and token environment for follow-up calls. After a successful create, use the page ID and live URL returned by the Notion API or connector for the receipt. Do not immediately run `resolve-live-token.js` or `provenance.js` against the newly created page: it will not exist in the local mirror until the next refresh, so a no-match result is expected and does not invalidate the successful write. Run an incremental mirror refresh only when immediate local searchability is needed; otherwise let the scheduler refresh it normally.
+
+Read `references/CODEX_APPS_NOTION.md` when diagnosing connector availability, workspace identity, authentication failures, or fallback behavior.
 
 ## Document Continuity
 
@@ -179,6 +219,10 @@ curl -sS "https://api.notion.com/v1/pages/$PAGE_ID" \
 ```
 
 If the resolver says a page belongs to a personal workspace, use that personal token. Do not fall back to a business token just because it can write somewhere else.
+
+Codex Apps Notion does not replace this resolver. If the connector is used, its workspace must match the workspace returned here. If that cannot be established, use the resolved token directly.
+
+Resolve a create operation from its existing parent page/database, not from the new page after creation. A brand-new page cannot be resolved from mirror provenance until it has been mirrored.
 
 ## Provenance Helper
 

@@ -151,6 +151,27 @@ It reports the workspace, mirror folder, source page, and `Token env`. Use that 
 
 This keeps privacy boundaries explicit: shared business pages use the business integration, and personal workflow pages use the personal integration.
 
+### Optional Codex Apps Notion fallback
+
+Codex-runtime agents may also expose `codex_apps.notion.*` tools (catalog namespace `codex_apps__notion`). Treat these as an optional interactive convenience, not as the scheduled mirror backend or a replacement for workspace token routing.
+
+- Use the local mirror first for search and provenance.
+- Resolve the destination workspace and token before any live write.
+- Use the connector only when its authenticated workspace is verified to match the resolved destination. Verify with a known mirrored anchor page ID; a successful call, user identity, or workspace display name is insufficient.
+- On connector OAuth failure, retry through the workspace-resolved API token instead of reporting that the whole Notion integration needs reauthentication.
+- If the direct API has a transient or authentication/permission failure, a connector verified for the same workspace may complete the interactive operation, but report the degraded direct path and exact remediation.
+- Check for an ambiguous write's result before switching surfaces so fallback does not create duplicates.
+- Never silently substitute another writable workspace.
+- If all paths fail, report which surface failed, which workspace was selected, what was tried, and the exact remediation.
+
+See `references/CODEX_APPS_NOTION.md` for the decision tree, error classification, fallback behavior, and user-facing error templates.
+
+For successful creates, resolve the destination workspace from the existing parent before writing and use the API/connector response URL for the receipt. Do not immediately run the mirror provenance resolver against the new page; it cannot appear in the mirror until refresh.
+
+### Deployment path safety
+
+Keep one discoverable skill copy at `<state>/skills/notion-sync-to-search`. Put backups under `<state>/archives/skills/notion-sync-to-search/<timestamp>`, never beside the live skill as `notion-sync-to-search.bak-*`. Existing OpenClaw sessions can cache a skill base directory, so start a new affected session after deployment when its transcript references an obsolete backup path.
+
 For a fuller receipt/provenance lookup, use:
 
 ```bash
