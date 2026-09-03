@@ -249,13 +249,35 @@ Run history retention defaults to 250 runs. Configure with `report.retentionRuns
 
 `searchIndex.freshnessFile` enables a simple local freshness check by comparing a search backend marker file mtime to the last completed mirror run.
 
-Multiple workspace configs can be supplied with `workspaces[]`; each entry may set `workspaceFolder`, `tokenEnv`, `pages`, `databases`, and other per-workspace overrides. When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`.
+Multiple workspace configs can be supplied with `workspaces[]`; each entry may set a stable `key`, exact-match `aliases`, `workspaceFolder`, `tokenEnv`, `pages`, `databases`, and other per-workspace overrides. When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`.
 
 The OpenClaw memory/search backend is responsible for indexing the changed local markdown. If search looks stale after resync, refresh/reindex/restart the active memory/search backend for that install.
 
 For normal operation, keep the generated host scheduler enabled.
 
 ## Live Notion Read Helpers
+
+### `resolve-live-token.js`
+
+Resolve a request-scoped Notion workspace binding without printing a token:
+
+```bash
+node scripts/resolve-live-token.js <config.json> <page-or-parent> [--workspace <key|name|alias>] [--env-file <path>] [--json]
+```
+
+The resolver uses mirrored page provenance when available. Otherwise it accepts an explicit workspace selector or automatically selects the only configured workspace. An unresolved multi-workspace request returns the configured choices and requires user selection. An explicit workspace that conflicts with page provenance is rejected.
+
+The JSON result includes `bindingVersion`, `bindingSource`, `workspaceKey`, `workspaceName`, `workspaceFolder`, `tokenEnv`, token presence, and any known page metadata. It never includes the token value.
+
+### `notion-live.js`
+
+Run the official `ntn` CLI through the resolved workspace binding:
+
+```bash
+node scripts/notion-live.js <config.json> <page-or-parent> [--workspace <key|name|alias>] [--env-file <path>] -- <ntn args...>
+```
+
+The wrapper exposes only the selected workspace credential to the child command and maps it to both `NOTION_API_KEY` and `NOTION_API_TOKEN`. Pass `--workspace <workspaceKey>` for follow-up operations on a newly created page before it appears in the mirror.
 
 ### `search-notion.js`
 
@@ -310,4 +332,4 @@ This skill intentionally does not include:
 - local markdown to Notion push
 - automatic Notion writes from mirror files
 
-Use the bundled `notion` skill or direct Notion API tools for Notion edits. Scheduled refresh will pull Notion changes into the search mirror.
+Use the workspace-bound direct Notion API path or `notion-live.js` for edits. Scheduled refresh will pull Notion changes into the search mirror.

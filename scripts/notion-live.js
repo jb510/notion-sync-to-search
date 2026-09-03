@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
- * Run the official ntn CLI with the token resolved from a mirrored page or
- * parent. The selected token is mapped to both Notion env conventions only for
- * the child process and is never printed.
+ * Run the official ntn CLI with a request-scoped Notion workspace binding.
+ * The binding comes from page provenance, --workspace, or a single-workspace
+ * install. The selected token is mapped to both Notion env conventions only
+ * for the child process and is never printed.
  */
 
 const fs = require('fs');
@@ -14,10 +15,11 @@ const { _internal: mirrorInternal } = require('./mirror-config.js');
 
 function usage(exitCode = 0) {
   const out = exitCode === 0 ? console.log : console.error;
-  out('Usage: notion-live.js <config.json> <page-or-parent> [--env-file <path>] [--dry-run] [--json] -- <ntn args...>');
+  out('Usage: notion-live.js <config.json> <page-or-parent> [--workspace <key|name|alias>] [--env-file <path>] [--dry-run] [--json] -- <ntn args...>');
   out('');
   out('Example:');
   out('  node scripts/notion-live.js config/notion-search-mirror.json <page-id> --env-file .env -- pages get <page-id> --json');
+  out('  node scripts/notion-live.js config/notion-search-mirror.json <new-page-id> --workspace personal --env-file .env -- pages get <new-page-id> --json');
   process.exit(exitCode);
 }
 
@@ -31,6 +33,7 @@ function parseArgs(argv) {
   const options = {
     configPath: path.resolve(head[0]),
     target: head[1],
+    workspace: null,
     envFile: null,
     dryRun: false,
     json: false,
@@ -39,6 +42,7 @@ function parseArgs(argv) {
 
   for (let i = 2; i < head.length; i++) {
     if (head[i] === '--env-file' && head[i + 1]) options.envFile = path.resolve(head[++i]);
+    else if (head[i] === '--workspace' && head[i + 1]) options.workspace = head[++i];
     else if (head[i] === '--dry-run') options.dryRun = true;
     else if (head[i] === '--json') options.json = true;
     else throw new Error(`Unknown argument: ${head[i]}`);
@@ -67,7 +71,7 @@ function route(options) {
   const config = JSON.parse(fs.readFileSync(options.configPath, 'utf8'));
   let resolved;
   try {
-    resolved = resolveTarget(config, options.configPath, options.target);
+    resolved = resolveTarget(config, options.configPath, options.target, { workspace: options.workspace });
   } catch (error) {
     const guidance = 'Ask the user which configured Notion workspace and existing page or parent to use; do not fall back to a default token.';
     const wrapped = new Error(
@@ -93,7 +97,9 @@ function route(options) {
 function publicRoute(resolved, ntnArgs) {
   return {
     workspaceName: resolved.workspaceName,
+    workspaceKey: resolved.workspaceKey,
     workspaceFolder: resolved.workspaceFolder,
+    bindingSource: resolved.bindingSource,
     pageId: resolved.pageId,
     title: resolved.title,
     url: resolved.url,

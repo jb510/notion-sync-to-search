@@ -31,6 +31,57 @@ This skill exists because Notion is good as a canonical workspace, but local Ope
 12. **In multi-user or multi-workspace installs, resolve both the intended Notion workspace and parent location before CRUD; ask when either remains ambiguous.**
 13. **Never fall back to whichever Notion token happens to be the default. Use the configured `tokenEnv` for the resolved page or parent.**
 14. **If workspace or page provenance cannot be resolved uniquely, ask the user which configured Notion workspace and page/parent to use; do not report a generic authentication failure.**
+15. **Treat the selected Notion workspace as a request-scoped runtime binding. Resolve it before the first live call and keep using it for every follow-up call unless the user explicitly switches workspaces.**
+16. **Do not split a workspace into read-only and read-write profiles. The user's request and the agent's existing authorization determine the operation; the workspace binding determines identity, credential, and destination.**
+
+## Runtime Workspace Binding
+
+For every live Notion request, resolve one binding before calling Notion. The binding is structured routing state, not a suggestion in the prompt and not whichever credential a tool happens to load first:
+
+```json
+{
+  "bindingVersion": 1,
+  "bindingSource": "page-provenance|explicit-workspace|single-workspace",
+  "workspaceKey": "personal",
+  "workspaceName": "Personal Notion",
+  "tokenEnv": "NOTION_API_KEY_PERSONAL",
+  "pageId": "optional-page-id"
+}
+```
+
+The binding never contains or prints the token value. Resolve it in this order:
+
+1. The target page's mirror provenance, when available.
+2. An explicit workspace named by the user, matched against the configured workspace `key`, `name`, `outFolder`, `tokenEnv`, or `aliases`.
+3. The only configured workspace on a single-workspace install.
+4. If multiple workspaces remain possible, ask which configured workspace to use and list their names. Do not fail as "outside scope," claim there is no writable connection, or try the default token.
+
+Once selected, keep the `workspaceKey` and `tokenEnv` in active task context. A newly created page will not appear in the mirror immediately, so follow-up edits to that page must reuse the existing binding with `--workspace <workspaceKey>` until provenance catches up. If an explicit workspace conflicts with known page provenance, stop and ask rather than switching tokens.
+
+Resolve or inspect the binding without exposing the secret:
+
+```bash
+node {baseDir}/scripts/resolve-live-token.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  <page-id-or-parent-id> \
+  --workspace <workspace-key-or-alias> \
+  --env-file /absolute/path/to/openclaw-state/.env \
+  --json
+```
+
+Workspace entries may define stable selectors without changing their display folders:
+
+```json
+{
+  "key": "personal",
+  "name": "Personal Notion",
+  "aliases": ["personal workspace", "my notion"],
+  "tokenEnv": "NOTION_API_KEY_PERSONAL",
+  "outFolder": "Personal"
+}
+```
+
+Use one profile per workspace identity. Do not create `-ro` and `-rw` variants; read versus write is an action-level decision after the workspace is bound.
 
 ## Shared Hybrid Search
 
@@ -118,11 +169,12 @@ On managed multi-workspace installs, do not invoke `ntn` directly. The official 
 node {baseDir}/scripts/notion-live.js \
   /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
   <existing-page-or-parent-id-or-url-or-mirror-file> \
+  --workspace <workspace-key-or-alias> \
   --env-file /absolute/path/to/openclaw-state/.env \
   -- pages get <page-id> --json
 ```
 
-Use the existing page as the routing target for edits. For creates, use the intended parent page/database as the routing target. For a newly created page that has not reached the mirror yet, continue using the already-resolved parent workspace/token for follow-up calls. The wrapper never prints the token. If it cannot resolve exactly one workspace, stop and ask the user which configured Notion workspace and page/parent they mean.
+Use the existing page as the routing target for edits. For creates, use the intended parent page/database as the routing target. For a newly created page that has not reached the mirror yet, continue using the already-resolved workspace binding for follow-up calls by passing `--workspace <workspaceKey>`. The wrapper never prints the token. If it cannot resolve exactly one workspace, stop and ask the user which configured Notion workspace and page/parent they mean.
 
 Codex runtimes may expose the connector as `codex_apps.notion.*`; catalog/config diagnostics may identify its namespace as `codex_apps__notion`. These names refer to the same optional connector surface.
 
@@ -149,7 +201,7 @@ If the connector fails, retry through the resolved direct API path. If the direc
 
 If fallback succeeds, complete the requested operation and briefly note which optional path was bypassed or which configured path is degraded. If all safe paths fail, give the user a concise failure receipt naming the failed surface, workspace, target, error category, what was tried, and the exact next action. Never report a generic "Notion needs reauthentication" when only one optional connector failed.
 
-For create operations, resolve the parent page/database workspace and token before creating the page. Retain that resolved workspace and token environment for follow-up calls. After a successful create, use the page ID and live URL returned by the Notion API or connector for the receipt. Do not immediately run `resolve-live-token.js` or `provenance.js` against the newly created page: it will not exist in the local mirror until the next refresh, so a no-match result is expected and does not invalidate the successful write. Run an incremental mirror refresh only when immediate local searchability is needed; otherwise let the scheduler refresh it normally.
+For create operations, resolve the parent page/database workspace and token before creating the page. Retain the returned binding for follow-up calls. After a successful create, use the page ID and live URL returned by the Notion API or connector for the receipt. The new page will not exist in the local mirror until the next refresh, so pass the retained `--workspace <workspaceKey>` binding when editing it before the mirror catches up. Run an incremental mirror refresh only when immediate local searchability is needed; otherwise let the scheduler refresh it normally.
 
 Read `references/CODEX_APPS_NOTION.md` when diagnosing connector availability, workspace identity, authentication failures, or fallback behavior.
 
@@ -684,13 +736,17 @@ For multiple Notion workspaces in one config, use `workspaces[]` with a `tokenEn
   "outDir": "notion-sync-read-only",
   "workspaces": [
     {
+      "key": "walden",
       "name": "Walden Business",
+      "aliases": ["business"],
       "tokenEnv": "NOTION_API_KEY",
       "outFolder": "Walden",
       "syncScope": "integration-visible-workspace"
     },
     {
+      "key": "joanna",
       "name": "Joanna Personal",
+      "aliases": ["joanna workflow"],
       "tokenEnv": "NOTION_API_KEY_PERSONAL",
       "outFolder": "Joanna Workflow",
       "syncScope": "integration-visible-workspace"
@@ -699,7 +755,7 @@ For multiple Notion workspaces in one config, use `workspaces[]` with a `tokenEn
 }
 ```
 
-When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`. `outFolder` is the preferred field name for multi-workspace configs; `workspaceFolder` remains accepted for older configs. The script refuses to sync if two workspaces resolve to the same output folder.
+When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`. `key` is the stable runtime selector; `aliases` holds additional exact selectors users may naturally name. `outFolder` is the preferred field name for multi-workspace configs; `workspaceFolder` remains accepted for older configs. The script refuses to sync if two workspaces resolve to the same output folder.
 
 Privacy depends on OpenClaw search paths. An agent pointed at `notion-sync-read-only` can search every workspace under that root. An agent that should see only business knowledge should point at `notion-sync-read-only/Walden` instead.
 

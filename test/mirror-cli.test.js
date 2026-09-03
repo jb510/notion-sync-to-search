@@ -126,6 +126,93 @@ test('live token resolver discovers auto workspace folders for a single token', 
   assert.equal(parsed.tokenAvailable, true);
 });
 
+test('live token resolver creates an explicit workspace binding for an unmirrored page', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const configPath = path.join(dir, 'config.json');
+  const envPath = path.join(dir, '.env');
+  const newPageId = '3193f788-993c-81f3-a066-ccb43c832b89';
+  fs.writeFileSync(configPath, JSON.stringify({
+    outDir: path.join(dir, 'mirror'),
+    workspaces: [
+      { key: 'anastasia', name: 'Anastasia Personal', aliases: ['Stace'], outFolder: 'Anastasia', tokenEnv: 'NOTION_API_KEY' },
+      { key: 'chad', name: 'Chad Personal', aliases: ['Chat'], outFolder: 'Chad', tokenEnv: 'NOTION_API_KEY_CHAD' },
+    ],
+  }));
+  fs.writeFileSync(envPath, 'NOTION_API_KEY=anastasia-token\nNOTION_API_KEY_CHAD=chad-token\n');
+
+  const output = runResolver([configPath, newPageId, '--workspace', 'Chat', '--env-file', envPath, '--json']);
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.bindingVersion, 1);
+  assert.equal(parsed.bindingSource, 'explicit-workspace');
+  assert.equal(parsed.workspaceKey, 'chad');
+  assert.equal(parsed.workspaceName, 'Chad Personal');
+  assert.equal(parsed.tokenEnv, 'NOTION_API_KEY_CHAD');
+  assert.equal(parsed.pageId, newPageId);
+  assert.equal(parsed.tokenAvailable, true);
+});
+
+test('live token resolver binds an unknown target automatically on a single-workspace install', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const configPath = path.join(dir, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    key: 'ground-control',
+    name: 'Ground Control Notion',
+    outDir: path.join(dir, 'mirror'),
+    workspaceFolder: 'Ground Control',
+    tokenEnv: 'NOTION_API_KEY',
+  }));
+
+  const output = runResolver([configPath, 'unmirrored-new-page', '--json']);
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.bindingSource, 'single-workspace');
+  assert.equal(parsed.workspaceKey, 'ground-control');
+  assert.equal(parsed.tokenEnv, 'NOTION_API_KEY');
+});
+
+test('legacy manifest folders sharing one token remain one runtime identity', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outDir = path.join(dir, 'mirror');
+  fs.mkdirSync(path.join(outDir, 'Old Workspace'), { recursive: true });
+  fs.mkdirSync(path.join(outDir, 'Renamed Workspace'), { recursive: true });
+  fs.writeFileSync(path.join(outDir, 'Old Workspace', '.notion-search-mirror.json'), JSON.stringify({ pages: {} }));
+  fs.writeFileSync(path.join(outDir, 'Renamed Workspace', '.notion-search-mirror.json'), JSON.stringify({ pages: {} }));
+  const configPath = path.join(dir, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({ outDir, workspaceFolder: 'auto', tokenEnv: 'NOTION_API_KEY' }));
+
+  const output = runResolver([configPath, 'unmirrored-new-page', '--json']);
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.bindingSource, 'single-workspace');
+  assert.equal(parsed.tokenEnv, 'NOTION_API_KEY');
+});
+
+test('explicit workspace binding cannot override conflicting page provenance', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outDir = path.join(dir, 'mirror');
+  const anastasiaDir = path.join(outDir, 'Anastasia');
+  fs.mkdirSync(anastasiaDir, { recursive: true });
+  const pageId = '374bb4fe-9887-8022-a1b0-c4e26975c46a';
+  const configPath = path.join(dir, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    outDir,
+    workspaces: [
+      { key: 'anastasia', name: 'Anastasia Personal', outFolder: 'Anastasia', tokenEnv: 'NOTION_API_KEY' },
+      { key: 'chad', name: 'Chad Personal', outFolder: 'Chad', tokenEnv: 'NOTION_API_KEY_CHAD' },
+    ],
+  }));
+  fs.writeFileSync(path.join(anastasiaDir, '.notion-search-mirror.json'), JSON.stringify({
+    pages: { [pageId]: { pageId, title: 'Attendees' } },
+  }));
+
+  const error = runScriptFailure(resolverCli, [configPath, pageId, '--workspace', 'chad', '--json']);
+  const parsed = JSON.parse(error.stdout);
+  assert.match(parsed.error, /binding conflict/);
+  assert.match(parsed.error, /belongs to Anastasia Personal/);
+});
+
 test('notion live wrapper maps the resolved workspace token to both CLI conventions', () => {
   const dir = tmpdir();
   test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -198,6 +285,51 @@ test('notion live wrapper asks for workspace resolution instead of falling back'
   assert.equal(error.status, 2);
   assert.match(error.stderr, /Ask the user which configured Notion workspace/);
   assert.match(error.stderr, /do not fall back to a default token/);
+});
+
+test('notion live wrapper reuses an explicit workspace binding before a new page is mirrored', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const binDir = path.join(dir, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  const pageId = '3193f788-993c-81f3-a066-ccb43c832b89';
+  const configPath = path.join(dir, 'config.json');
+  const envPath = path.join(dir, '.env');
+  fs.writeFileSync(configPath, JSON.stringify({
+    outDir: path.join(dir, 'mirror'),
+    workspaces: [
+      { key: 'anastasia', name: 'Anastasia Personal', outFolder: 'Anastasia', tokenEnv: 'NOTION_API_KEY' },
+      { key: 'chad', name: 'Chad Personal', aliases: ['Chat'], outFolder: 'Chad', tokenEnv: 'NOTION_API_KEY_CHAD' },
+    ],
+  }));
+  fs.writeFileSync(envPath, 'NOTION_API_KEY=anastasia-token\nNOTION_API_KEY_CHAD=chad-token\n');
+  const stub = path.join(binDir, 'ntn');
+  fs.writeFileSync(stub, `#!/usr/bin/env node
+const ok = process.env.NOTION_API_TOKEN === 'chad-token'
+  && process.env.NOTION_API_KEY === 'chad-token'
+  && process.env.NOTION_API_KEY_CHAD === 'chad-token';
+console.log(JSON.stringify({ ok, args: process.argv.slice(2) }));
+process.exit(ok ? 0 : 9);
+`);
+  fs.chmodSync(stub, 0o755);
+
+  const output = runScript(notionLiveCli, [
+    configPath,
+    pageId,
+    '--workspace', 'Chat',
+    '--env-file', envPath,
+    '--', 'pages', 'get', pageId, '--json',
+  ], {
+    env: {
+      PATH: `${binDir}:${process.env.PATH}`,
+      NOTION_API_KEY: '',
+      NOTION_API_KEY_CHAD: '',
+      NOTION_API_TOKEN: '',
+    },
+  });
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.args, ['pages', 'get', pageId, '--json']);
 });
 
 test('provenance reports source URL, workspace, receipt, and token env', () => {

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Resolve which configured Notion token env var owns a mirrored page.
+ * Resolve a request-scoped Notion workspace binding.
  *
- * This is for live Notion edits after a search hit comes from the local
- * read-only mirror. It maps page IDs/URLs/mirrored markdown paths back to the
- * workspace config and prints the token env var to use for Notion API writes.
+ * A binding can come from mirrored page provenance, an explicit workspace
+ * selector, or the only configured workspace. It names the workspace and the
+ * token env var without printing the token itself.
  */
 
 const fs = require('fs');
@@ -19,11 +19,12 @@ const {
 const MANIFEST_FILE = '.notion-search-mirror.json';
 
 function usage(exitCode = 0) {
-  console.log('Usage: resolve-live-token.js <config.json> <page-id|notion-url|mirror-file> [--env-file <path>] [--json] [--shell]');
+  console.log('Usage: resolve-live-token.js <config.json> <page-id|notion-url|mirror-file> [--workspace <key|name|alias>] [--env-file <path>] [--json] [--shell]');
   console.log('');
   console.log('Examples:');
   console.log('  node scripts/resolve-live-token.js config/notion-search-mirror.json 374bb4fe98878022a1b0c4e26975c46a');
   console.log('  node scripts/resolve-live-token.js config/notion-search-mirror.json "notion-sync-read-only/Personal/Page.md" --shell');
+  console.log('  node scripts/resolve-live-token.js config/notion-search-mirror.json <new-page-id> --workspace personal --json');
   process.exit(exitCode);
 }
 
@@ -35,12 +36,14 @@ function parseArgs(argv) {
   const options = {
     configPath: args[0],
     target: args[1],
+    workspace: null,
     envFile: null,
     shell: false,
   };
 
   for (let i = 2; i < args.length; i++) {
     if (args[i] === '--env-file' && args[i + 1]) options.envFile = args[++i];
+    else if (args[i] === '--workspace' && args[i + 1]) options.workspace = args[++i];
     else if (args[i] === '--shell') options.shell = true;
     else if (args[i] === '--json') {
       // handled by hasJsonFlag()
@@ -69,13 +72,7 @@ function resolveOutDir(config, configPath) {
 
 function workspaceEntries(config, outDir) {
   if (Array.isArray(config.workspaces) && config.workspaces.length > 0) {
-    return config.workspaces.map((workspace, index) => ({
-      index,
-      name: workspace.name || workspace.outFolder || workspace.workspaceFolder || `workspace-${index + 1}`,
-      tokenEnv: workspace.tokenEnv || 'NOTION_API_KEY',
-      folder: workspace.outFolder || workspace.workspaceFolder || workspace.name || null,
-      raw: workspace,
-    }));
+    return config.workspaces.map((workspace, index) => workspaceEntry(workspace, index));
   }
 
   // A single-token config with workspaceFolder: "auto" writes one manifest
@@ -86,22 +83,27 @@ function workspaceEntries(config, outDir) {
   const configured = config.outFolder || config.workspaceFolder || config.name || null;
   const discovered = discoverManifestFolders(outDir);
   if ((configured === 'auto' || !configured) && discovered.length > 0) {
-    return discovered.map((folder, index) => ({
-      index,
-      name: folder || config.name || `workspace-${index + 1}`,
-      tokenEnv: config.tokenEnv || 'NOTION_API_KEY',
-      folder,
-      raw: config,
-    }));
+    return discovered.map((folder, index) => workspaceEntry({ ...config, name: folder || config.name, outFolder: folder }, index));
   }
 
-  return [{
-    index: 0,
-    name: config.name || config.outFolder || config.workspaceFolder || 'default',
-    tokenEnv: config.tokenEnv || 'NOTION_API_KEY',
-    folder: config.outFolder || config.workspaceFolder || config.name || null,
-    raw: config,
-  }];
+  return [workspaceEntry(config, 0)];
+}
+
+function workspaceEntry(workspace, index) {
+  const name = workspace.name || workspace.outFolder || workspace.workspaceFolder || `workspace-${index + 1}`;
+  const key = workspace.key || normalizeSelector(name) || `workspace-${index + 1}`;
+  const aliases = Array.isArray(workspace.aliases)
+    ? workspace.aliases.map(value => String(value).trim()).filter(Boolean)
+    : [];
+  return {
+    index,
+    key,
+    name,
+    aliases,
+    tokenEnv: workspace.tokenEnv || 'NOTION_API_KEY',
+    folder: workspace.outFolder || workspace.workspaceFolder || workspace.name || null,
+    raw: workspace,
+  };
 }
 
 function discoverManifestFolders(outDir) {
@@ -205,9 +207,60 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function resolveTarget(config, configPath, target) {
+function normalizeSelector(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function workspaceSelectors(workspace) {
+  return [
+    workspace.key,
+    workspace.name,
+    workspace.folder,
+    workspace.tokenEnv,
+    ...workspace.aliases,
+  ].filter(Boolean).map(normalizeSelector);
+}
+
+function resolveWorkspaceSelector(workspaces, selector) {
+  const normalized = normalizeSelector(selector);
+  const matches = workspaces.filter(workspace => workspaceSelectors(workspace).includes(normalized));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1 && new Set(matches.map(workspace => workspace.tokenEnv)).size === 1) {
+    return matches[0];
+  }
+  const choices = workspaces.map(workspace => `${workspace.name} (${workspace.key})`).join(', ');
+  if (matches.length > 1) {
+    throw new Error(`Notion workspace selector "${selector}" is ambiguous. Configured workspaces: ${choices}. Ask the user which configured Notion workspace to use.`);
+  }
+  throw new Error(`No configured Notion workspace matched "${selector}". Configured workspaces: ${choices}. Ask the user which configured Notion workspace to use.`);
+}
+
+function bindingResult(workspace, match, pageId, bindingSource) {
+  return {
+    bindingVersion: 1,
+    bindingSource,
+    workspaceKey: workspace.key,
+    workspaceName: workspace.name,
+    workspaceAliases: workspace.aliases,
+    workspaceFolder: workspace.folder,
+    tokenEnv: workspace.tokenEnv,
+    pageId: match?.entry?.pageId || pageId || '',
+    title: match?.entry?.title || '',
+    url: match?.entry?.url || '',
+    manifestPath: match?.manifestPath || '',
+  };
+}
+
+function resolveBinding(config, configPath, target, options = {}) {
   const outDir = resolveOutDir(config, configPath);
   const workspaces = workspaceEntries(config, outDir);
+  const selectedWorkspace = options.workspace
+    ? resolveWorkspaceSelector(workspaces, options.workspace)
+    : null;
 
   let pageId = extractPageId(target);
   if (!pageId && looksLikePath(target)) {
@@ -216,21 +269,29 @@ function resolveTarget(config, configPath, target) {
 
   let match = pageId ? findByPageId(outDir, workspaces, pageId) : null;
   if (!match && looksLikePath(target)) match = findByPath(outDir, workspaces, target);
-  if (!match) {
+  if (match && selectedWorkspace && match.workspace.index !== selectedWorkspace.index) {
     throw new Error(
-      `No mirrored page matched target: ${target}. Ask the user which configured Notion workspace and existing page or parent to use; do not fall back to a default token.`
+      `Notion binding conflict: target belongs to ${match.workspace.name} (${match.workspace.key}), not ${selectedWorkspace.name} (${selectedWorkspace.key}). Ask the user which workspace/page they intend; do not switch tokens silently.`
     );
   }
+  if (match) return bindingResult(match.workspace, match, pageId, 'page-provenance');
+  if (selectedWorkspace) return bindingResult(selectedWorkspace, null, pageId, 'explicit-workspace');
+  const uniqueTokenEnvs = new Set(workspaces.map(workspace => workspace.tokenEnv));
+  // A legacy single-workspace install can contain more than one historical
+  // manifest folder after a workspace rename. One configured tokenEnv still
+  // means one Notion identity, so unknown/new pages do not require a prompt.
+  if (workspaces.length === 1 || uniqueTokenEnvs.size === 1) {
+    return bindingResult(workspaces[0], null, pageId, 'single-workspace');
+  }
 
-  return {
-    pageId: match.entry.pageId || pageId,
-    title: match.entry.title || '',
-    url: match.entry.url || '',
-    tokenEnv: match.workspace.tokenEnv,
-    workspaceName: match.workspace.name,
-    workspaceFolder: match.workspace.folder,
-    manifestPath: match.manifestPath,
-  };
+  const choices = workspaces.map(workspace => `${workspace.name} (${workspace.key})`).join(', ');
+  throw new Error(
+    `No mirrored page matched target: ${target}. Workspace selection is required. Configured workspaces: ${choices}. Ask the user which configured Notion workspace to use; do not fall back to a default token or refuse the request as out of scope.`
+  );
+}
+
+function resolveTarget(config, configPath, target, options = {}) {
+  return resolveBinding(config, configPath, target, options);
 }
 
 function shellQuote(value) {
@@ -242,7 +303,7 @@ function main() {
     const options = parseArgs(process.argv.slice(2));
     const configPath = resolveConfigPath(options.configPath);
     const config = readJson(configPath);
-    const result = resolveTarget(config, configPath, options.target);
+    const result = resolveBinding(config, configPath, options.target, { workspace: options.workspace });
     const envPresence = {
       ...Object.fromEntries(Object.keys(process.env).map(key => [key, true])),
       ...loadEnvPresence(options.envFile),
@@ -256,6 +317,8 @@ function main() {
       console.log(`export NOTION_API_KEY="${'${'}${result.tokenEnv}${'}'}"`);
     } else {
       console.log(`Workspace: ${result.workspaceName}`);
+      console.log(`Workspace key: ${result.workspaceKey}`);
+      console.log(`Binding source: ${result.bindingSource}`);
       console.log(`Folder: ${result.workspaceFolder || '(root)'}`);
       console.log(`Page: ${result.title || result.pageId}`);
       console.log(`Token env: ${result.tokenEnv}${result.tokenAvailable ? '' : ' (not currently loaded)'}`);
@@ -271,5 +334,12 @@ function main() {
 if (require.main === module) {
   main();
 } else {
-  module.exports = { resolveTarget, extractPageId, workspaceEntries };
+  module.exports = {
+    resolveBinding,
+    resolveTarget,
+    resolveWorkspaceSelector,
+    extractPageId,
+    workspaceEntries,
+    _internal: { normalizeSelector, workspaceSelectors },
+  };
 }

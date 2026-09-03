@@ -1,6 +1,6 @@
 {
   "name": "notion-sync-to-search",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Keep one install-scoped Notion mirror and shared search index for OpenClaw agents.",
   "license": "MIT-0",
   "repository": {
@@ -17,6 +17,7 @@
     "notion-sync-shared-index": "scripts/sync-shared-index.js",
     "notion-install-fastembed": "scripts/install-fastembed.js",
     "notion-live": "scripts/notion-live.js",
+    "notion-resolve-binding": "scripts/resolve-live-token.js",
     "notion-provenance": "scripts/provenance.js",
     "notion-privacy-lint": "scripts/privacy-lint.js",
     "notion-sync-smoke": "scripts/sync-smoke.js"

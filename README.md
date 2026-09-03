@@ -26,6 +26,8 @@ That makes the skill and mirror available to all agents in one OpenClaw install 
 - Edits go to Notion directly.
 - Scheduled refresh is the normal operating path.
 - In multi-workspace installs, live edits must use the token configured for the target mirror workspace.
+- Resolve one request-scoped workspace binding before any live Notion call and reuse it for follow-up operations.
+- Use one profile per workspace identity. Read versus write is determined by the request and agent authorization, not separate `-ro`/`-rw` profiles.
 - Every user-facing Notion search, read, create, edit, or failed edit should include a receipt with a live Notion link.
 - Follow document continuity: edit the referenced existing Notion page unless the user explicitly asks for a new page.
 - Ask the user where a new/moved Notion page should go when the destination is not explicit or clearly defined by local policy.
@@ -135,12 +137,15 @@ For follow-up edits, use the existing target page. If the user first asks to cre
 
 If the target page is not obvious, ask a short clarification before writing. If several pages match the title, ask which one. If no page matches an edit request, ask for the intended page instead of creating one.
 
+The resolver returns a first-class workspace binding containing the workspace key/name, binding source, configured `tokenEnv`, and optional page provenance. It never returns the token value. Resolution uses page provenance first, an explicit workspace selector second, and the only configured workspace third. A multi-workspace request that still cannot be resolved must ask the user which configured workspace to use; it must not fall back to the first token or refuse the operation as out of scope.
+
 Use the resolver:
 
 ```bash
 node scripts/resolve-live-token.js \
   /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
   <notion-page-id-or-url-or-mirrored-file> \
+  --workspace <optional-workspace-key-name-or-alias> \
   --env-file /absolute/path/to/openclaw-state/.env
 ```
 
@@ -150,6 +155,19 @@ It reports the workspace, mirror folder, source page, and `Token env`. Use that 
 - Optional: use `ntn` only when the user has explicitly installed and authenticated it for that OpenClaw install.
 
 This keeps privacy boundaries explicit: shared business pages use the business integration, and personal workflow pages use the personal integration.
+
+For a page that was just created and has not reached the mirror, retain the returned `workspaceKey` and pass it on follow-up calls:
+
+```bash
+node scripts/notion-live.js \
+  /absolute/path/to/openclaw-state/config/notion-search-mirror.json \
+  <new-page-id> \
+  --workspace <workspaceKey> \
+  --env-file /absolute/path/to/openclaw-state/.env \
+  -- pages get <new-page-id> --json
+```
+
+If that explicit workspace conflicts with known page provenance, the resolver stops instead of silently switching credentials.
 
 ### Optional Codex Apps Notion fallback
 
@@ -207,6 +225,7 @@ Use this shape:
 ```text
 Notion receipt:
 - Action: searched/read/created/edited/failed
+- Workspace/area: <resolved workspace and parent location>
 - Page: <title>
 - Link: <live Notion URL>
 ```
@@ -395,13 +414,17 @@ Multiple workspaces can be configured in one file. Each entry may name a differe
   "outDir": "notion-sync-read-only",
   "workspaces": [
     {
+      "key": "walden",
       "name": "Walden Business",
+      "aliases": ["business"],
       "tokenEnv": "NOTION_API_KEY",
       "outFolder": "Walden",
       "syncScope": "integration-visible-workspace"
     },
     {
+      "key": "joanna",
       "name": "Joanna Personal",
+      "aliases": ["joanna workflow"],
       "tokenEnv": "NOTION_API_KEY_PERSONAL",
       "outFolder": "Joanna Workflow",
       "syncScope": "integration-visible-workspace"
@@ -410,7 +433,7 @@ Multiple workspaces can be configured in one file. Each entry may name a differe
 }
 ```
 
-When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`. `outFolder` is the preferred field name for multi-workspace configs; `workspaceFolder` remains accepted for older configs. The script refuses to sync if two workspaces resolve to the same output folder.
+When `tokenEnv` is set, that environment variable must be present for that workspace. Workspaces without `tokenEnv` use `NOTION_API_KEY`. `key` is the stable runtime selector and `aliases` contains additional exact names users may use. `outFolder` is the preferred field name for multi-workspace configs; `workspaceFolder` remains accepted for older configs. The script refuses to sync if two workspaces resolve to the same output folder.
 
 The output remains separated under one read-only mirror root:
 
