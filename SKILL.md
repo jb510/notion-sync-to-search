@@ -2,14 +2,14 @@
 name: notion-sync-to-search
 description: Use for every Notion request in an OpenClaw install that has a managed Notion mirror, including search, read, create, edit, append, move, comments, and sync. It resolves the correct workspace token before live CRUD and asks the user when the target workspace or location is ambiguous.
 license: MIT-0
-metadata: {"openclaw":{"requires":{"bins":["node"]},"primaryEnv":"NOTION_API_KEY","env":[{"name":"NOTION_API_KEY","description":"Default Notion integration token; install config may route to another tokenEnv such as NOTION_API_KEY_PERSONAL or NOTION_API_KEY_CHAD.","required":false,"sensitive":true},{"name":"NOTION_API_KEY_PERSONAL","description":"Optional workspace-specific Notion integration token when mirror config tokenEnv selects it.","required":false,"sensitive":true},{"name":"NOTION_API_KEY_CHAD","description":"Optional workspace-specific Notion integration token when mirror config tokenEnv selects it.","required":false,"sensitive":true},{"name":"NOTION_VERSION","description":"Optional Notion API version override. Defaults to 2026-03-11.","required":false,"sensitive":false}]}}
+metadata: {"openclaw":{"requires":{"bins":["node"]},"primaryEnv":"NOTION_API_KEY","env":[{"name":"NOTION_API_KEY","description":"Legacy/default Notion integration token; keep this only for a single-workspace install.","required":false,"sensitive":true},{"name":"NOTION_API_KEY_WALDEN","description":"Canonical shared Walden workspace integration token.","required":false,"sensitive":true},{"name":"NOTION_API_KEY_PERSONAL_CHAD","description":"Canonical Chad personal Notion integration token.","required":false,"sensitive":true},{"name":"NOTION_API_KEY_PERSONAL_STACE","description":"Canonical Stace personal Notion integration token.","required":false,"sensitive":true},{"name":"NOTION_API_KEY_PERSONAL_JOANNA","description":"Canonical Joanna personal Notion integration token.","required":false,"sensitive":true},{"name":"NOTION_API_KEY_WALDEN_CHAD","description":"Optional Chad-specific integration token for the Walden workspace when separate access is intentional.","required":false,"sensitive":true},{"name":"NOTION_API_KEY_WALDEN_STACE","description":"Optional Stace-specific integration token for the Walden workspace when separate access is intentional.","required":false,"sensitive":true},{"name":"NOTION_API_KEY_WALDEN_JOANNA","description":"Optional Joanna-specific integration token for the Walden workspace when separate access is intentional.","required":false,"sensitive":true},{"name":"NOTION_VERSION","description":"Optional Notion API version override. Defaults to 2026-03-11.","required":false,"sensitive":false}]}}
 ---
 
 # Notion Sync To Search
 
 Use one canonical skill codebase across the fleet. Do not fork this skill for a host, user, agent, or Notion workspace. Install-specific configuration may define one or several Notion credentials, workspace roots, mirror folders, and index paths. CT101 and CT113 may temporarily validate a newer shared release before fleet-wide deployment.
 
-This skill is the routing authority for all Notion operations on a managed install. It takes precedence over a generic or bundled `notion` skill. Do not use `ntn doctor`, a missing `NOTION_API_TOKEN`, or a read-only mirror hit as evidence that live Notion access is unavailable. Managed installs commonly keep credentials under workspace-specific names such as `NOTION_API_KEY` and `NOTION_API_KEY_CHAD`; the mirror config's `tokenEnv` is authoritative.
+This skill is the routing authority for all Notion operations on a managed install. It takes precedence over a generic or bundled `notion` skill. Do not use `ntn doctor`, a missing `NOTION_API_TOKEN`, or a read-only mirror hit as evidence that live Notion access is unavailable. The mirror config's `tokenEnv` is authoritative, and new multi-workspace configurations must use the unambiguous naming standard below.
 
 Keep a local read-only markdown mirror of Notion content so OpenClaw memory/search can use Notion as an auxiliary searchable knowledge base without treating local files as the source of truth.
 
@@ -44,7 +44,7 @@ For every live Notion request, resolve one binding before calling Notion. The bi
   "bindingSource": "page-provenance|explicit-workspace|single-workspace",
   "workspaceKey": "personal",
   "workspaceName": "Personal Notion",
-  "tokenEnv": "NOTION_API_KEY_PERSONAL",
+  "tokenEnv": "NOTION_API_KEY_PERSONAL_JOANNA",
   "pageId": "optional-page-id"
 }
 ```
@@ -76,12 +76,23 @@ Workspace entries may define stable selectors without changing their display fol
   "key": "personal",
   "name": "Personal Notion",
   "aliases": ["personal workspace", "my notion"],
-  "tokenEnv": "NOTION_API_KEY_PERSONAL",
+  "tokenEnv": "NOTION_API_KEY_PERSONAL_JOANNA",
   "outFolder": "Personal"
 }
 ```
 
 Use one profile per workspace identity. Do not create `-ro` and `-rw` variants; read versus write is an action-level decision after the workspace is bound.
+
+## Credential Naming Standard
+
+Environment names must identify the Notion workspace scope first and the user only when a separate user-specific integration actually exists:
+
+- `NOTION_API_KEY_<WORKSPACE>` is the canonical name for one shared integration in a workspace, for example `NOTION_API_KEY_WALDEN`.
+- `NOTION_API_KEY_<WORKSPACE>_<USER>` is the canonical name for a distinct user-specific integration in that workspace, for example `NOTION_API_KEY_WALDEN_CHAD`.
+- Personal workspaces use `PERSONAL` as the workspace scope, for example `NOTION_API_KEY_PERSONAL_CHAD`, `NOTION_API_KEY_PERSONAL_STACE`, and `NOTION_API_KEY_PERSONAL_JOANNA`.
+- `NOTION_API_KEY` remains accepted for a genuinely single-workspace install (such as CT101/CT113), but is not the canonical name for a multi-workspace config.
+
+Do not create or select ambiguous names such as `NOTION_API_KEY_PERSONAL` or `NOTION_API_KEY_CHAD`: each omits either the workspace or the user dimension. Treat those names as legacy during migration, keep the configured `tokenEnv` authoritative, and ask if the workspace/integration identity is uncertain. Do not create per-user Walden variables merely because several users access Walden; use one `NOTION_API_KEY_WALDEN` when they intentionally share one integration, and add the user suffix only for a genuinely separate token and access boundary.
 
 ## Shared Hybrid Search
 
@@ -739,7 +750,7 @@ For multiple Notion workspaces in one config, use `workspaces[]` with a `tokenEn
       "key": "walden",
       "name": "Walden Business",
       "aliases": ["business"],
-      "tokenEnv": "NOTION_API_KEY",
+      "tokenEnv": "NOTION_API_KEY_WALDEN",
       "outFolder": "Walden",
       "syncScope": "integration-visible-workspace"
     },
@@ -747,7 +758,7 @@ For multiple Notion workspaces in one config, use `workspaces[]` with a `tokenEn
       "key": "joanna",
       "name": "Joanna Personal",
       "aliases": ["joanna workflow"],
-      "tokenEnv": "NOTION_API_KEY_PERSONAL",
+      "tokenEnv": "NOTION_API_KEY_PERSONAL_JOANNA",
       "outFolder": "Joanna Workflow",
       "syncScope": "integration-visible-workspace"
     }
@@ -821,7 +832,7 @@ The legacy `install-openclaw-memory.js` helper is migration-only and must not be
 - Inspect `config/notion-search-mirror.json` before running bulk mirrors, especially workspace mirroring.
 - Scheduler files are written only when `install-scheduler.js --mode install` is used explicitly.
 - Network access is limited to `https://api.notion.com`.
-- The mirror scripts read credentials only from `NOTION_API_KEY`.
+- The mirror scripts receive the selected credential through process-local `NOTION_API_KEY`; the source variable is the workspace's configured `tokenEnv` (for example `NOTION_API_KEY_WALDEN` or `NOTION_API_KEY_PERSONAL_CHAD`).
 - The mirror scripts only write inside the current workspace.
 - The mirror scripts refuse to write through symlinks or symlinked path ancestors.
 - Markdown and manifest writes are atomic where supported by the filesystem.

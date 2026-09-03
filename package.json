@@ -1,6 +1,6 @@
 {
   "name": "notion-sync-to-search",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Keep one install-scoped Notion mirror and shared search index for OpenClaw agents.",
   "license": "MIT-0",
   "repository": {
