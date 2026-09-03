@@ -88,6 +88,7 @@ NOTION_API_KEY_PERSONAL_CHAD          # Chad's personal workspace
 NOTION_API_KEY_PERSONAL_STACE          # Stace's personal workspace
 NOTION_API_KEY_PERSONAL_JOANNA        # Joanna's personal workspace
 NOTION_API_KEY_WALDEN_CHAD            # only if Chad has a separate Walden integration
+NOTION_API_KEY_WALDEN_JOANNA          # only if Joanna has a separate Walden integration
 ```
 
 Derive the workspace segment from the token's verified `GET /v1/users/me` identity, not the agent or integration label. Thus a Joanna-owned integration that authenticates to Walden is `NOTION_API_KEY_WALDEN_JOANNA`; use `NOTION_API_KEY_PERSONAL_JOANNA` only for a token that actually authenticates to Joanna's personal workspace.
