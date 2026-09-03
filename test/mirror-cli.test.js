@@ -928,20 +928,22 @@ test('scheduler helper can generate state-level install plan', () => {
     ? 'launchd'
     : (process.platform === 'linux' ? 'systemd-user' : 'cron');
   assert.equal(plan.kind, expectedKind);
-  assert.match(plan.content, /notion-search-mirror\.json/);
-  assert.match(plan.content, /notion-sync-to-search\.log/);
-  assert.match(plan.content, /state/);
-  assert.match(plan.content, /--env-file/);
-  assert.match(plan.content, /\.env/);
-  assert.doesNotMatch(plan.content, /set -a/);
+  const planContent = plan.content || (plan.files || []).map(file => file.content).join('\n');
+  const planPaths = plan.path ? [plan.path] : (plan.files || []).map(file => file.path);
+  assert.match(planContent, /notion-search-mirror\.json/);
+  assert.match(planContent, /notion-sync-to-search\.log/);
+  assert.match(planContent, /state/);
+  assert.match(planContent, /--env-file/);
+  assert.match(planContent, /\.env/);
+  assert.doesNotMatch(planContent, /set -a/);
   if (process.platform === 'darwin') {
     assert.equal(plan.path, path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.openclaw.notion-sync-to-search.plist'));
-    assert.match(plan.content, /StartInterval/);
-    assert.match(plan.content, /2220/);
+    assert.match(planContent, /StartInterval/);
+    assert.match(planContent, /2220/);
   } else {
-    assert.equal(plan.path, path.join(os.homedir(), '.config', 'systemd', 'user', 'notion-sync-to-search.service'));
-    assert.doesNotMatch(plan.content, /EnvironmentFile=-/);
-    assert.match(plan.content, /WorkingDirectory=/);
+    assert.equal(planPaths.includes(path.join(os.homedir(), '.config', 'systemd', 'user', 'notion-sync-to-search.service')), true);
+    assert.doesNotMatch(planContent, /EnvironmentFile=-/);
+    assert.match(planContent, /WorkingDirectory=/);
   }
 });
 
