@@ -924,7 +924,10 @@ test('scheduler helper can generate state-level install plan', () => {
     '--json',
   ], { cwd: repo, encoding: 'utf8' });
   const plan = JSON.parse(output);
-  assert.equal(plan.kind, process.platform === 'darwin' ? 'launchd' : 'systemd');
+  const expectedKind = process.platform === 'darwin'
+    ? 'launchd'
+    : (process.platform === 'linux' ? 'systemd-user' : 'cron');
+  assert.equal(plan.kind, expectedKind);
   assert.match(plan.content, /notion-search-mirror\.json/);
   assert.match(plan.content, /notion-sync-to-search\.log/);
   assert.match(plan.content, /state/);
