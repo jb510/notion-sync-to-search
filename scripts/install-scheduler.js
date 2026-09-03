@@ -145,7 +145,8 @@ function buildContext(options) {
   const configuredEvery = options.smoke
     ? parsePositiveInt(config?.smoke?.intervalMinutes, DEFAULT_EVERY_MINUTES)
     : parsePositiveInt(config?.sync?.intervalMinutes, DEFAULT_EVERY_MINUTES);
-  const scriptPath = path.resolve(__dirname, options.smoke ? 'sync-smoke.js' : 'mirror-config.js');
+  const sharedIndexEnabled = !options.report && !options.smoke && config?.searchIndex?.provider === 'qmd';
+  const scriptPath = path.resolve(__dirname, options.smoke ? 'sync-smoke.js' : (sharedIndexEnabled ? 'sync-shared-index.js' : 'mirror-config.js'));
   const nodePath = schedulerNodePath();
   const logDir = options.logDir ? path.resolve(expandHome(options.logDir)) : path.join(workdir, 'logs');
   const logPath = path.join(logDir, options.smoke ? 'notion-sync-to-search-smoke.log' : (options.report ? 'notion-sync-to-search-report.log' : 'notion-sync-to-search.log'));

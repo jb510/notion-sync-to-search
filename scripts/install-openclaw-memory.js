@@ -9,7 +9,9 @@ const os = require('os');
 const path = require('path');
 
 function usage() {
-  console.log('Usage: install-openclaw-memory.js [--state-dir <path>] [--config <openclaw.json>] [--workspace <path>] [--mirror-path <path>] [--replace-notion-paths] [--link-agent-workspaces] [--dry-run] [--json]');
+  console.log('DEPRECATED: this helper creates a separate built-in Notion index in every OpenClaw agent database.');
+  console.log('Use install-shared-index.js instead. Pass --allow-legacy-per-agent-index only for an intentional legacy deployment.');
+  console.log('Usage: install-openclaw-memory.js [--allow-legacy-per-agent-index] [--state-dir <path>] [--config <openclaw.json>] [--workspace <path>] [--mirror-path <path>] [--replace-notion-paths] [--link-agent-workspaces] [--dry-run] [--json]');
   console.log('');
   console.log('Examples:');
   console.log('  install-openclaw-memory.js --state-dir ~/.openclaw --replace-notion-paths');
@@ -35,6 +37,7 @@ function parseArgs(argv) {
     linkAgentWorkspaces: false,
     dryRun: false,
     json: false,
+    allowLegacyPerAgentIndex: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -58,6 +61,8 @@ function parseArgs(argv) {
       options.dryRun = true;
     } else if (arg === '--json') {
       options.json = true;
+    } else if (arg === '--allow-legacy-per-agent-index') {
+      options.allowLegacyPerAgentIndex = true;
     } else {
       throw new Error(`Unknown or incomplete argument: ${arg}`);
     }
@@ -199,6 +204,9 @@ function linkAgentWorkspaces(config, options) {
 
 function run(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
+  if (!options.allowLegacyPerAgentIndex) {
+    throw new Error('Refusing to add a Notion mirror to global OpenClaw memory paths. Use install-shared-index.js, or pass --allow-legacy-per-agent-index to acknowledge per-agent database duplication.');
+  }
   const raw = fs.readFileSync(options.configPath, 'utf8');
   const config = readJson(options.configPath);
   const extraPaths = ensureExtraPath(config, options.mirrorPath, options);

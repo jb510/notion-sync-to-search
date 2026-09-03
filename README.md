@@ -484,64 +484,32 @@ The scripts are deliberately conservative with the Notion API:
 - Child pages and child databases are kept as references in the parent page export. Their content is mirrored as separate pages when visible to the integration, so search hits are attributed to the page where the content actually lives instead of a higher-level index page.
 - Local page content is not sent back to Notion; this skill only reads from Notion and writes local markdown cache.
 
-## OpenClaw Memory/Search
+## Shared Search Architecture
 
-Add the mirror folder to whichever OpenClaw memory/search backend indexes local markdown for each install. QMD is one supported example, not a requirement.
+Use one read-only mirror and one named QMD index per OpenClaw install. Do not add the Notion mirror to OpenClaw built-in `memory.search.extraPaths`: built-in memory databases are per agent, so a global mirror path duplicates the same embeddings into every agent database.
 
-### QMD and embeddings
-
-When OpenClaw uses QMD, this skill should only expose the read-only mirror to QMD. It should not set `agents.defaults.memorySearch.provider` to `openai`, `local`, or any other embedding provider just to make Notion searchable.
-
-QMD has its own local vector embedding path and commonly reports the bundled/default model as `embeddinggemma-300M-GGUF` / `embeddinggemma-300M-Q8_0`. That QMD vector index is managed by QMD commands such as `qmd update`, `qmd embed`, `qmd query`, and `qmd vsearch`. The Notion mirror is just another markdown collection for QMD to index.
-
-Do not route this mirror through OpenAI embeddings unless the user explicitly wants that separate OpenClaw memory-provider behavior. OpenAI embeddings may still be used by other systems, such as OpenBrain, but that is independent of this skill.
-
-If OpenClaw reports `vector=false`, verify QMD directly before changing config:
+Create the shared index and, on OpenClaw versions that support managed MCP servers, register it as `notion-search`:
 
 ```bash
-qmd status
-qmd search "known Notion page title"
-qmd vsearch "semantic query"
+node ~/.openclaw/skills/notion-sync-to-search/scripts/install-shared-index.js \
+  --config ~/.openclaw/config/notion-search-mirror.json \
+  --configure-openclaw
 ```
 
-Direct QMD status is the source of truth for whether QMD has vectors for its own index. The skill does not need a `vector=true` setting; it only needs the mirror path included in the memory/search paths.
+The index name must be unique to the install, especially when multiple installs run under one OS user. Example names are `openclaw-ct113-notion`, `openclaw-anastasia-notion`, and `openclaw-joanna-notion`.
 
-For OpenClaw installs with multiple agent workspaces, prefer an absolute install-level mirror path:
+Agents should use the managed `notion-search` MCP tools when available. The version-independent fallback is:
 
 ```bash
-node ~/.openclaw/skills/notion-sync-to-search/scripts/install-openclaw-memory.js \
-  --state-dir ~/.openclaw \
-  --replace-notion-paths
+node ~/.openclaw/skills/notion-sync-to-search/scripts/search-shared-index.js \
+  --config ~/.openclaw/config/notion-search-mirror.json \
+  --query "known Notion page title" \
+  --limit 5
 ```
 
-The helper adds the absolute `<state>/notion-sync-read-only` path to `agents.defaults.memorySearch.extraPaths` and backs up `openclaw.json` before editing it. `--replace-notion-paths` removes legacy `notion-sync-read-only` entries that pointed at per-workspace mirrors, while preserving unrelated extra paths.
+Scheduled refreshes should run `sync-shared-index.js`, which updates QMD only after the Notion mirror refresh succeeds. QMD embeddings remain local; this design does not route the mirror through OpenAI embeddings.
 
-Older per-workspace layouts can still use a relative mirror and workspace symlinks:
-
-```bash
-cd ~/.openclaw/workspace
-node skills/notion-sync-to-search/scripts/install-openclaw-memory.js \
-  --config ~/.openclaw/openclaw.json \
-  --workspace ~/.openclaw/workspace \
-  --mirror-path notion-sync-read-only \
-  --link-agent-workspaces
-```
-
-With `--link-agent-workspaces`, it links each configured agent workspace back to the same read-only mirror because relative `extraPaths` are workspace-dependent. It refuses to overwrite non-empty existing paths and backs up `openclaw.json` before editing it.
-
-Example QMD config:
-
-```json
-{
-  "memory": {
-    "backend": "qmd",
-    "qmd": {
-      "includeDefaultMemory": true,
-      "paths": ["notion-sync-read-only"]
-    }
-  }
-}
-```
+`install-openclaw-memory.js` is retained only for explicit legacy migrations and refuses broad per-agent Notion indexing unless `--allow-legacy-per-agent-index` is supplied.
 
 Use the correct absolute/workspace-relative path for your OpenClaw install.
 

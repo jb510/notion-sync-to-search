@@ -67,7 +67,7 @@ function resolveOutDir(config, configPath) {
   return path.resolve(path.dirname(configPath), outDir);
 }
 
-function workspaceEntries(config) {
+function workspaceEntries(config, outDir) {
   if (Array.isArray(config.workspaces) && config.workspaces.length > 0) {
     return config.workspaces.map((workspace, index) => ({
       index,
@@ -78,6 +78,23 @@ function workspaceEntries(config) {
     }));
   }
 
+  // A single-token config with workspaceFolder: "auto" writes one manifest
+  // per integration-visible Notion workspace name. Discover those folders so
+  // an existing page can still be routed to the one configured token. Older
+  // installs also omit workspaceFolder entirely, so treat that shape the same
+  // way when manifests already exist.
+  const configured = config.outFolder || config.workspaceFolder || config.name || null;
+  const discovered = discoverManifestFolders(outDir);
+  if ((configured === 'auto' || !configured) && discovered.length > 0) {
+    return discovered.map((folder, index) => ({
+      index,
+      name: folder || config.name || `workspace-${index + 1}`,
+      tokenEnv: config.tokenEnv || 'NOTION_API_KEY',
+      folder,
+      raw: config,
+    }));
+  }
+
   return [{
     index: 0,
     name: config.name || config.outFolder || config.workspaceFolder || 'default',
@@ -85,6 +102,18 @@ function workspaceEntries(config) {
     folder: config.outFolder || config.workspaceFolder || config.name || null,
     raw: config,
   }];
+}
+
+function discoverManifestFolders(outDir) {
+  const folders = [];
+  if (fs.existsSync(path.join(outDir, MANIFEST_FILE))) folders.push(null);
+  if (!fs.existsSync(outDir) || !fs.statSync(outDir).isDirectory()) return folders;
+
+  for (const entry of fs.readdirSync(outDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (fs.existsSync(path.join(outDir, entry.name, MANIFEST_FILE))) folders.push(entry.name);
+  }
+  return folders;
 }
 
 function manifestPathFor(outDir, workspace) {
@@ -178,7 +207,7 @@ function escapeRegExp(value) {
 
 function resolveTarget(config, configPath, target) {
   const outDir = resolveOutDir(config, configPath);
-  const workspaces = workspaceEntries(config);
+  const workspaces = workspaceEntries(config, outDir);
 
   let pageId = extractPageId(target);
   if (!pageId && looksLikePath(target)) {
@@ -188,7 +217,9 @@ function resolveTarget(config, configPath, target) {
   let match = pageId ? findByPageId(outDir, workspaces, pageId) : null;
   if (!match && looksLikePath(target)) match = findByPath(outDir, workspaces, target);
   if (!match) {
-    throw new Error(`No mirrored page matched target: ${target}`);
+    throw new Error(
+      `No mirrored page matched target: ${target}. Ask the user which configured Notion workspace and existing page or parent to use; do not fall back to a default token.`
+    );
   }
 
   return {

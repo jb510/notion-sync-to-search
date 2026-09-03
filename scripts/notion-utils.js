@@ -70,7 +70,7 @@ function checkApiKey() {
   if (process.argv.includes('--doctor')) return;
 
   if (!getApiKey()) {
-    const message = 'No Notion API token found. Set NOTION_API_KEY in the environment.';
+    const message = 'No routed Notion API token is loaded as NOTION_API_KEY. Resolve the target page or parent with resolve-live-token.js, then use its configured tokenEnv (for example NOTION_API_KEY_PERSONAL or NOTION_API_KEY_CHAD) through the managed route. If the selected token is unavailable, ask which configured Notion workspace to use; never substitute another workspace token.';
     if (hasJsonFlag()) {
       console.log(JSON.stringify({ error: message }, null, 2));
     } else {

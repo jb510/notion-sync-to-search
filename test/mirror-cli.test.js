@@ -13,6 +13,7 @@ const repo = path.resolve(__dirname, '..');
 const cli = path.join(repo, 'scripts', 'mirror-config.js');
 const schedulerCli = path.join(repo, 'scripts', 'install-scheduler.js');
 const resolverCli = path.join(repo, 'scripts', 'resolve-live-token.js');
+const notionLiveCli = path.join(repo, 'scripts', 'notion-live.js');
 const provenanceCli = path.join(repo, 'scripts', 'provenance.js');
 const privacyLintCli = path.join(repo, 'scripts', 'privacy-lint.js');
 const syncSmokeCli = path.join(repo, 'scripts', 'sync-smoke.js');
@@ -98,6 +99,105 @@ test('live token resolver maps mirrored page to workspace tokenEnv', () => {
   assert.equal(parsed.workspaceFolder, 'Personal');
   assert.equal(parsed.tokenEnv, 'NOTION_API_KEY_PERSONAL');
   assert.equal(parsed.tokenAvailable, true);
+});
+
+test('live token resolver discovers auto workspace folders for a single token', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outDir = path.join(dir, 'mirror');
+  const workspaceDir = path.join(outDir, 'Notion Workspace');
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const pageId = '228b9b5a-66b4-80bf-805c-d928791b2763';
+  const configPath = path.join(dir, 'config.json');
+  const envPath = path.join(dir, '.env');
+  fs.writeFileSync(configPath, JSON.stringify({ outDir, workspaceFolder: 'auto' }));
+  fs.writeFileSync(envPath, 'NOTION_API_KEY=ntn_single_workspace\n');
+  fs.writeFileSync(path.join(workspaceDir, '.notion-search-mirror.json'), JSON.stringify({
+    pages: {
+      [pageId]: { pageId, title: 'Teamspace Home', url: 'https://example.notion.site/teamspace' },
+    },
+  }));
+
+  const output = runResolver([configPath, pageId, '--env-file', envPath, '--json']);
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.workspaceName, 'Notion Workspace');
+  assert.equal(parsed.workspaceFolder, 'Notion Workspace');
+  assert.equal(parsed.tokenEnv, 'NOTION_API_KEY');
+  assert.equal(parsed.tokenAvailable, true);
+});
+
+test('notion live wrapper maps the resolved workspace token to both CLI conventions', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outDir = path.join(dir, 'mirror');
+  const personalDir = path.join(outDir, 'Anastasia');
+  const binDir = path.join(dir, 'bin');
+  fs.mkdirSync(personalDir, { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  const pageId = '374bb4fe-9887-8022-a1b0-c4e26975c46a';
+  const configPath = path.join(dir, 'config.json');
+  const envPath = path.join(dir, '.env');
+  fs.writeFileSync(configPath, JSON.stringify({
+    outDir,
+    workspaces: [
+      { name: 'Anastasia Personal', outFolder: 'Anastasia', tokenEnv: 'NOTION_API_KEY' },
+      { name: 'Chad Personal', outFolder: 'Chad', tokenEnv: 'NOTION_API_KEY_CHAD' },
+    ],
+  }));
+  fs.writeFileSync(envPath, 'NOTION_API_KEY=anastasia-token\nNOTION_API_KEY_CHAD=chad-token\n');
+  fs.writeFileSync(path.join(personalDir, '.notion-search-mirror.json'), JSON.stringify({
+    pages: {
+      [pageId]: { pageId, title: 'Attendees', url: 'https://example.notion.site/attendees' },
+    },
+  }));
+  const stub = path.join(binDir, 'ntn');
+  fs.writeFileSync(stub, `#!/usr/bin/env node
+const ok = process.env.NOTION_API_TOKEN === 'anastasia-token'
+  && process.env.NOTION_API_KEY === 'anastasia-token'
+  && !process.env.NOTION_API_KEY_CHAD;
+console.log(JSON.stringify({ ok, args: process.argv.slice(2) }));
+process.exit(ok ? 0 : 9);
+`);
+  fs.chmodSync(stub, 0o755);
+
+  const output = runScript(notionLiveCli, [
+    configPath,
+    pageId,
+    '--env-file', envPath,
+    '--', 'pages', 'get', pageId, '--json',
+  ], {
+    env: {
+      PATH: `${binDir}:${process.env.PATH}`,
+      NOTION_API_KEY: '',
+      NOTION_API_KEY_CHAD: 'chad-token-must-not-leak',
+      NOTION_API_TOKEN: '',
+    },
+  });
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.args, ['pages', 'get', pageId, '--json']);
+});
+
+test('notion live wrapper asks for workspace resolution instead of falling back', () => {
+  const dir = tmpdir();
+  test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const configPath = path.join(dir, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    outDir: path.join(dir, 'mirror'),
+    workspaces: [
+      { name: 'Anastasia Personal', outFolder: 'Anastasia', tokenEnv: 'NOTION_API_KEY' },
+      { name: 'Chad Personal', outFolder: 'Chad', tokenEnv: 'NOTION_API_KEY_CHAD' },
+    ],
+  }));
+
+  const error = runScriptFailure(notionLiveCli, [
+    configPath,
+    'unknown-page',
+    '--dry-run',
+  ]);
+  assert.equal(error.status, 2);
+  assert.match(error.stderr, /Ask the user which configured Notion workspace/);
+  assert.match(error.stderr, /do not fall back to a default token/);
 });
 
 test('provenance reports source URL, workspace, receipt, and token env', () => {
@@ -608,6 +708,7 @@ test('openclaw memory helper links agent workspaces to one mirror', () => {
   }));
 
   const result = openclawInternal.run([
+    '--allow-legacy-per-agent-index',
     '--config', configPath,
     '--workspace', primary,
     '--mirror-path', 'notion-sync-read-only',
@@ -628,7 +729,7 @@ test('openclaw memory helper supports state-level absolute mirror paths', () => 
   const configPath = path.join(state, 'openclaw.json');
   fs.writeFileSync(configPath, JSON.stringify({ agents: { defaults: {}, list: [] } }));
 
-  const result = openclawInternal.run(['--state-dir', state, '--json']);
+  const result = openclawInternal.run(['--allow-legacy-per-agent-index', '--state-dir', state, '--json']);
   const updated = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   assert.deepEqual(updated.agents.defaults.memorySearch.extraPaths, [path.join(state, 'notion-sync-read-only')]);
   assert.equal(result.configPath, configPath);
@@ -653,7 +754,7 @@ test('openclaw memory helper can replace legacy notion mirror paths', () => {
     },
   }));
 
-  openclawInternal.run(['--state-dir', state, '--replace-notion-paths', '--json']);
+  openclawInternal.run(['--allow-legacy-per-agent-index', '--state-dir', state, '--replace-notion-paths', '--json']);
   const updated = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   assert.deepEqual(updated.agents.defaults.memorySearch.extraPaths, [
     '/keep/other-docs',

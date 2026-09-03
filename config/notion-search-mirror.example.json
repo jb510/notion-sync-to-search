@@ -17,7 +17,27 @@
     "maxRunMinutes": 60
   },
   "searchIndex": {
-    "freshnessFile": ""
+    "provider": "qmd",
+    "indexName": "openclaw-install-notion",
+    "collectionName": "notion-mirror",
+    "mcpServerName": "notion-search",
+    "qmdCommand": "qmd",
+    "embed": false,
+    "noRerank": true,
+    "freshnessFile": ".qmd-index-updated",
+    "semantic": {
+      "enabled": true,
+      "provider": "fastembed",
+      "model": "BAAI/bge-small-en-v1.5",
+      "pythonCommand": ".fastembed-venv/bin/python",
+      "indexPath": ".fastembed/notion-vectors.sqlite",
+      "cacheDir": ".fastembed/model-cache",
+      "chunkChars": 1800,
+      "chunkOverlap": 200,
+      "maxCharsPerFile": 12000,
+      "batchSize": 64,
+      "weight": 0.8
+    }
   },
   "smoke": {
     "intervalMinutes": 60,

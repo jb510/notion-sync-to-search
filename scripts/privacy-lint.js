@@ -137,6 +137,18 @@ function lintPrivacy(notionConfig, notionConfigPath, options = {}) {
     .filter(folder => folder && folder !== 'auto' && folder !== 'none');
   const sensitiveWorkspaces = workspaces.filter(workspace => workspace.sensitive);
 
+  for (const item of resolvedSearchPaths) {
+    if (item.resolved === outDir || item.resolved.startsWith(outDir + path.sep)) {
+      findings.push({
+        severity: options.strict ? 'error' : 'warn',
+        code: 'notion-mirror-in-builtin-memory',
+        path: item.path,
+        trail: item.trail,
+        message: 'Notion mirror is configured as an OpenClaw built-in memory path. Multi-agent installs will duplicate this index in every eligible agent database; use the install-scoped shared index instead.',
+      });
+    }
+  }
+
   if (!openclawConfig) {
     findings.push({
       severity: 'warn',

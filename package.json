@@ -1,7 +1,7 @@
 {
   "name": "notion-sync-to-search",
-  "version": "0.1.0",
-  "description": "Keep a local read-only markdown mirror of an integration-visible Notion workspace for OpenClaw memory/search.",
+  "version": "0.3.0",
+  "description": "Keep one install-scoped Notion mirror and shared search index for OpenClaw agents.",
   "license": "MIT-0",
   "repository": {
     "type": "git",
@@ -12,6 +12,11 @@
     "notion-mirror-config": "scripts/mirror-config.js",
     "notion-install-scheduler": "scripts/install-scheduler.js",
     "notion-install-openclaw-memory": "scripts/install-openclaw-memory.js",
+    "notion-install-shared-index": "scripts/install-shared-index.js",
+    "notion-search-shared-index": "scripts/search-shared-index.js",
+    "notion-sync-shared-index": "scripts/sync-shared-index.js",
+    "notion-install-fastembed": "scripts/install-fastembed.js",
+    "notion-live": "scripts/notion-live.js",
     "notion-provenance": "scripts/provenance.js",
     "notion-privacy-lint": "scripts/privacy-lint.js",
     "notion-sync-smoke": "scripts/sync-smoke.js"
