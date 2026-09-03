@@ -92,6 +92,8 @@ Environment names must identify the Notion workspace scope first and the user on
 - Personal workspaces use `PERSONAL` as the workspace scope, for example `NOTION_API_KEY_PERSONAL_CHAD`, `NOTION_API_KEY_PERSONAL_STACE`, and `NOTION_API_KEY_PERSONAL_JOANNA`.
 - `NOTION_API_KEY` remains accepted for a genuinely single-workspace install (such as CT101/CT113), but is not the canonical name for a multi-workspace config.
 
+Choose `<WORKSPACE>` from the token's verified Notion API identity (`GET /v1/users/me`), not from an agent name or an integration label. For example, a Joanna-owned integration that authenticates to Walden is `NOTION_API_KEY_WALDEN_JOANNA`; `NOTION_API_KEY_PERSONAL_JOANNA` is reserved for a token that actually authenticates to Joanna's personal workspace.
+
 Do not create or select ambiguous names such as `NOTION_API_KEY_PERSONAL` or `NOTION_API_KEY_CHAD`: each omits either the workspace or the user dimension. Treat those names as legacy during migration, keep the configured `tokenEnv` authoritative, and ask if the workspace/integration identity is uncertain. Do not create per-user Walden variables merely because several users access Walden; use one `NOTION_API_KEY_WALDEN` when they intentionally share one integration, and add the user suffix only for a genuinely separate token and access boundary.
 
 ## Shared Hybrid Search
